@@ -1,0 +1,26 @@
+# 1. 가상환경 및 환경변수
+venv/
+.env
+
+# 2. 결과물 및 캐시 (데이터 파일은 제외, csv는 git에 허용됨)
+outputs/*
+!outputs/.gitkeep
+experiments/*
+!experiments/.gitkeep
+
+# 3. 파이썬 임시 파일 및 주피터 캐시
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.pytest_cache/
+
+# 4. 무거운 모델 가중치 파일 차단
+*.pkl
+*.h5
+*.pt
+*.pth
+
+# 5. OS 및 시스템 파일
+.DS_Store
+Thumbs.db
