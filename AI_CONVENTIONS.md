@@ -1,6 +1,6 @@
 # AI & Team Conventions for KOSPI Prediction Project
 
-이 문서는 팀원들이 사용하는 모든 AI 어시스턴트(Gemini, Cursor, Copilot, Cline 등)와 팀원들이 공통으로 준수해야 할 프로젝트 규칙 및 가이드라인입니다.
+이 문서는 팀원들이 사용하는 모든 AI 어시스턴트와 팀원들이 공통으로 준수해야 할 프로젝트 규칙 및 가이드라인입니다.
 
 ## 1. 프로젝트 개요 (Project Overview)
 - **목표:** 코스피(KOSPI) 지수의 방향성(상승/하락) 예측
