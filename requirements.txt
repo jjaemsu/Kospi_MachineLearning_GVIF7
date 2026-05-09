@@ -6,3 +6,5 @@ matplotlib
 ta-lib
 pykis
 OpenDartReader
+pykrx
+python-dotenv
