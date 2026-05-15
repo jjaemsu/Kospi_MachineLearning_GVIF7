@@ -31,3 +31,19 @@ Outputs:
 - `before_vif.csv` and `after_vif.csv`: VIF tables.
 - `removed_vif_variables.csv`: variables removed because VIF was at or above the threshold.
 - `vif_pruned_dataset.csv`: cleaned dataset after VIF pruning.
+
+## Stationarity (ADF) and Autocorrelation (ACF/PACF)
+
+Use `src/preprocessing/stationarity_autocorr_diagnostics.py` to run ADF tests on the target series (`none`, `1st diff`, `log 1st diff`), auto-select a recommended transform, and export ACF/PACF diagnostics.
+
+```powershell
+python src/preprocessing/stationarity_autocorr_diagnostics.py --input data/merged_data.csv --target Close
+```
+
+Outputs under `outputs/stationarity_autocorr`:
+
+- `adf_results.csv`: ADF statistics for each transform.
+- `stationarity_summary.csv`: recommended transform at selected alpha.
+- `transformed_target_series.csv`: original + differenced series columns.
+- `acf_pacf_recommended.png`: ACF/PACF chart for recommended transform.
+- `acf_pacf_values_recommended.csv`: lag-wise ACF/PACF values.
