@@ -8,3 +8,4 @@ pykis
 OpenDartReader
 pykrx
 python-dotenv
+pandas-datareader

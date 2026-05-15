@@ -3,9 +3,9 @@
 이 파일은 프로젝트의 진행 상황을 트래킹하는 곳입니다. 팀원과 AI 어시스턴트는 작업을 시작하기 전 이 파일을 확인하고, 작업이 완료되면 상태를 업데이트(`[ ]` -> `[x]`) 해야 합니다.
 
 ## 📋 1단계: 데이터 준비 및 탐색 (Data & EDA)
-- [ ] **[Data] 코스피 주가 데이터 수집 코드 작성** (`src/data/fetch_kospi.py`)
-  - `FinanceDataReader` 또는 `yfinance`를 사용하여 최근 10년 코스피 지수(OHLCV) 일별 데이터 수집 후 `data/` 폴더에 CSV 저장.
-- [ ] **[Data] 거시경제 지표 데이터 수집 (선택)**
+- [x] **[Data] 코스피 주가 및 거래량/수급 데이터 수집** (`src/data/fetch_price.py`, `src/data/fetch_volume.py`)
+  - `FinanceDataReader` 및 `pykrx`를 사용하여 주가, 거래량, 투자자별 수급 데이터를 통합 수집.
+- [X] **[Data] 거시경제 지표 데이터 수집 (선택)**
   - 환율, 금리, S&P500 등 외부 지표 수집.
 - [ ] **[EDA] 데이터 탐색 및 시각화** (`notebooks/01_eda_basic.ipynb`)
   - 수집된 데이터 결측치 확인 및 기본 차트 시각화.
