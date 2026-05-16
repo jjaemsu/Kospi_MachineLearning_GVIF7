@@ -9,3 +9,5 @@ OpenDartReader
 pykrx
 python-dotenv
 pandas-datareader
+
+statsmodels
