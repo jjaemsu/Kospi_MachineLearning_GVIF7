@@ -4,6 +4,7 @@ import argparse
 import base64
 import html
 import io
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,19 +43,32 @@ class PruneResult:
     removed_variables: pd.DataFrame
 
 
+@dataclass
+class ReportRun:
+    name: str
+    input_path: Path | None
+    output_dir: Path
+    report_path: Path
+    before: AnalysisResult
+    prune_result: PruneResult
+    after: AnalysisResult
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Build before/after correlation and VIF reports. "
+            "Build before/after correlation and VIF reports for one or more CSV files. "
             "The script keeps the target column, removes predictors with VIF >= threshold, "
-            "and writes HTML plus CSV tables."
+            "and writes HTML plus CSV tables. With multiple inputs it also writes a combined "
+            "CV-only report after removing Open/High/Low price columns."
         )
     )
     parser.add_argument(
         "--input",
         required=True,
+        nargs="+",
         type=Path,
-        help="Input CSV path. Put your later dataset here.",
+        help="One or more input CSV paths. Put your later datasets here.",
     )
     parser.add_argument(
         "--target",
@@ -92,34 +106,76 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_numeric_data(input_path: Path, target: str, encoding: str, drop_na: bool) -> pd.DataFrame:
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input CSV does not exist: {input_path}")
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return slug.strip("._") or "dataset"
 
-    raw = pd.read_csv(input_path, encoding=encoding)
+
+def is_ohl_column(column: str, target: str) -> bool:
+    if column == target:
+        return False
+
+    normalized = column.strip().lower()
+    return bool(re.match(r"^(open|high|low|o|h|l)(_|$)", normalized))
+
+
+def drop_ohl_columns(data: pd.DataFrame, target: str) -> pd.DataFrame:
+    drop_columns = [column for column in data.columns if is_ohl_column(column, target)]
+    return data.drop(columns=drop_columns)
+
+
+def clean_numeric_data(raw: pd.DataFrame, target: str, drop_na: bool, source_name: str) -> pd.DataFrame:
     if target not in raw.columns:
-        raise ValueError(f"Target column '{target}' was not found. Available columns: {list(raw.columns)}")
+        raise ValueError(f"Target column '{target}' was not found in {source_name}. Available columns: {list(raw.columns)}")
 
     numeric = raw.select_dtypes(include=[np.number]).copy()
     if target not in numeric.columns:
-        raise ValueError(f"Target column '{target}' must be numeric for correlation analysis.")
+        raise ValueError(f"Target column '{target}' must be numeric for correlation analysis in {source_name}.")
 
-    constant_columns = [col for col in numeric.columns if numeric[col].nunique(dropna=True) <= 1]
+    numeric = numeric.dropna(axis=1, how="all")
+    constant_columns = [col for col in numeric.columns if col != target and numeric[col].nunique(dropna=True) <= 1]
     numeric = numeric.drop(columns=constant_columns)
     if target not in numeric.columns:
-        raise ValueError(f"Target column '{target}' is constant after cleaning and cannot be analyzed.")
+        raise ValueError(f"Target column '{target}' is constant after cleaning and cannot be analyzed in {source_name}.")
 
     if drop_na:
         numeric = numeric.dropna(axis=0).copy()
     else:
         numeric = numeric.fillna(numeric.median(numeric_only=True))
 
+    numeric = numeric.dropna(axis=1, how="all")
     if numeric.empty:
-        raise ValueError("No rows remain after numeric cleaning.")
+        raise ValueError(f"No rows remain after numeric cleaning in {source_name}.")
     if numeric.shape[1] < 2:
-        raise ValueError("At least one numeric predictor plus the target is required.")
+        raise ValueError(f"At least one numeric predictor plus the target is required in {source_name}.")
 
     return numeric
+
+
+def read_numeric_data(input_path: Path, target: str, encoding: str, drop_na: bool) -> pd.DataFrame:
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input CSV does not exist: {input_path}")
+
+    raw = pd.read_csv(input_path, encoding=encoding)
+    return clean_numeric_data(raw, target, drop_na, str(input_path))
+
+
+def read_combined_cv_only_data(
+    input_paths: list[Path],
+    target: str,
+    encoding: str,
+    drop_na: bool,
+) -> pd.DataFrame:
+    frames = []
+    for input_path in input_paths:
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input CSV does not exist: {input_path}")
+        raw = pd.read_csv(input_path, encoding=encoding)
+        numeric = clean_numeric_data(raw, target, drop_na=False, source_name=str(input_path))
+        frames.append(drop_ohl_columns(numeric, target))
+
+    combined = pd.concat(frames, axis=0, ignore_index=True, sort=False)
+    return clean_numeric_data(combined, target, drop_na, "combined CV-only data")
 
 
 def compute_vif(predictors: pd.DataFrame) -> pd.DataFrame:
@@ -502,7 +558,7 @@ def render_html(
 
 def write_outputs(
     output_dir: Path,
-    input_path: Path,
+    input_path: Path | None,
     target: str,
     before: AnalysisResult,
     prune_result: PruneResult,
@@ -518,30 +574,160 @@ def write_outputs(
 
     report_path = output_dir / "correlation_vif_report.html"
     report_path.write_text(
-        render_html(input_path, target, before, prune_result, after, pair_threshold, vif_threshold),
+        render_html(input_path or Path("combined_cv_only"), target, before, prune_result, after, pair_threshold, vif_threshold),
         encoding="utf-8",
     )
     return report_path
 
 
-def main() -> None:
-    args = parse_args()
-    data = read_numeric_data(args.input, args.target, args.encoding, args.drop_na)
-    before = analyze(data, args.target, "Before VIF Pruning", args.pair_threshold)
-    prune_result = prune_by_vif(data, args.target, args.vif_threshold)
-    after = analyze(prune_result.pruned_data, args.target, "After VIF Pruning", args.pair_threshold)
+def run_report(
+    name: str,
+    data: pd.DataFrame,
+    output_dir: Path,
+    input_path: Path | None,
+    target: str,
+    pair_threshold: float,
+    vif_threshold: float,
+) -> ReportRun:
+    before = analyze(data, target, "Before VIF Pruning", pair_threshold)
+    prune_result = prune_by_vif(data, target, vif_threshold)
+    after = analyze(prune_result.pruned_data, target, "After VIF Pruning", pair_threshold)
     report_path = write_outputs(
-        args.output_dir,
-        args.input,
-        args.target,
+        output_dir,
+        input_path,
+        target,
         before,
         prune_result,
         after,
-        args.pair_threshold,
-        args.vif_threshold,
+        pair_threshold,
+        vif_threshold,
     )
-    print(f"Created report: {report_path}")
-    print(f"Removed variables: {len(prune_result.removed_variables)}")
+    return ReportRun(
+        name=name,
+        input_path=input_path,
+        output_dir=output_dir,
+        report_path=report_path,
+        before=before,
+        prune_result=prune_result,
+        after=after,
+    )
+
+
+def render_index(runs: list[ReportRun], target: str, pair_threshold: float, vif_threshold: float) -> str:
+    generated_at = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+    rows = []
+    for run in runs:
+        top_corr = run.after.target_correlation.iloc[0] if not run.after.target_correlation.empty else None
+        top_vif = run.after.vif.iloc[0] if not run.after.vif.empty else None
+        top_corr_text = f"{top_corr['Variable']} ({top_corr['Correlation']:.4f})" if top_corr is not None else "-"
+        top_vif_text = f"{top_vif['Variable']} ({top_vif['VIF']:.4f})" if top_vif is not None else "-"
+        report_link = html.escape(str(run.report_path.relative_to(run.output_dir.parent)).replace("\\", "/"))
+        source = str(run.input_path) if run.input_path is not None else "combined CV-only input"
+        rows.append(
+            f"""
+            <tr>
+              <td>{html.escape(run.name)}</td>
+              <td>{html.escape(source)}</td>
+              <td>{len(run.before.data):,}</td>
+              <td>{run.after.data.shape[1] - 1:,}</td>
+              <td>{len(run.prune_result.removed_variables):,}</td>
+              <td>{html.escape(top_corr_text)}</td>
+              <td>{html.escape(top_vif_text)}</td>
+              <td><a href="{report_link}">Open report</a></td>
+            </tr>
+            """
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Correlation and VIF Report Index</title>
+  <style>
+    body {{ margin: 0; padding: 28px 18px 48px; background: #f5f7fb; color: #111827; font-family: "Malgun Gothic", "Segoe UI", sans-serif; line-height: 1.55; }}
+    main {{ width: min(1280px, 100%); margin: 0 auto; }}
+    section {{ background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 22px; box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06); }}
+    h1 {{ margin: 0 0 10px; font-size: 30px; }}
+    p {{ margin: 0 0 16px; color: #64748b; font-size: 14px; }}
+    .table-wrap {{ border: 1px solid #d9e2ec; border-radius: 8px; overflow: auto; background: white; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+    th, td {{ border-bottom: 1px solid #edf2f7; padding: 10px 12px; text-align: left; vertical-align: top; white-space: nowrap; }}
+    thead th {{ position: sticky; top: 0; background: #eaf4f2; color: #0f172a; z-index: 1; }}
+    a {{ color: #0f766e; font-weight: 700; text-decoration: none; }}
+    @media (max-width: 760px) {{ body {{ padding: 14px 10px 32px; }} section {{ padding: 16px; }} h1 {{ font-size: 24px; }} }}
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>Correlation and VIF Report Index</h1>
+      <p>Target: {html.escape(target)} | VIF threshold: {vif_threshold:g} | High pair threshold: |r| >= {pair_threshold:g} | Generated: {generated_at}</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Dataset</th>
+              <th>Source</th>
+              <th>Rows</th>
+              <th>After Predictors</th>
+              <th>Removed</th>
+              <th>Top After Target Corr</th>
+              <th>Top After VIF</th>
+              <th>Report</th>
+            </tr>
+          </thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+def main() -> None:
+    args = parse_args()
+    runs: list[ReportRun] = []
+
+    for input_path in args.input:
+        data = read_numeric_data(input_path, args.target, args.encoding, args.drop_na)
+        dataset_dir = args.output_dir / slugify(input_path.stem)
+        runs.append(
+            run_report(
+                input_path.stem,
+                data,
+                dataset_dir,
+                input_path,
+                args.target,
+                args.pair_threshold,
+                args.vif_threshold,
+            )
+        )
+
+    if len(args.input) > 1:
+        combined = read_combined_cv_only_data(args.input, args.target, args.encoding, args.drop_na)
+        runs.append(
+            run_report(
+                "combined_cv_only",
+                combined,
+                args.output_dir / "combined_cv_only",
+                None,
+                args.target,
+                args.pair_threshold,
+                args.vif_threshold,
+            )
+        )
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    index_path = args.output_dir / "index.html"
+    index_path.write_text(render_index(runs, args.target, args.pair_threshold, args.vif_threshold), encoding="utf-8")
+
+    print(f"Created index: {index_path}")
+    for run in runs:
+        print(f"Created report: {run.report_path}")
+        print(f"{run.name} removed variables: {len(run.prune_result.removed_variables)}")
 
 
 if __name__ == "__main__":
