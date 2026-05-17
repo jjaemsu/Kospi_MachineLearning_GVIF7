@@ -1,0 +1,4 @@
+﻿Step,RemovedVariable,VIFAtRemoval,Reason
+1,US_CPI,40.47540872021619,Highest remaining VIF >= 10
+2,KR_CPI,17.639280943448,Highest remaining VIF >= 10
+3,Nikkei225,11.093144270472301,Highest remaining VIF >= 10

@@ -1,0 +1,8 @@
+﻿Step,RemovedVariable,VIFAtRemoval,Reason
+1,US_CPI,57.6739751043734,Highest remaining VIF >= 10
+2,KR_GDP,32.264375260655854,Highest remaining VIF >= 10
+3,KR_Interest_Rate_10Y,999999.9999712444,Highest remaining VIF >= 10
+4,US_Interest_Rate_10Y,999999.9999712444,Highest remaining VIF >= 10
+5,KR_CPI,80.80494754410682,Highest remaining VIF >= 10
+6,US_Interest_Rate_3Y,26.138721768042767,Highest remaining VIF >= 10
+7,US_Spread_10Y_3Y,15.408675712407076,Highest remaining VIF >= 10

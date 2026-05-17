@@ -1,0 +1,3 @@
+﻿Step,RemovedVariable,VIFAtRemoval,Reason
+1,Nikkei225,30.788292795416346,Highest remaining VIF >= 10
+2,S&P500,13.600865957087715,Highest remaining VIF >= 10
