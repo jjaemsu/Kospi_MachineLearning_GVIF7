@@ -24,6 +24,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import matplotlib
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -38,9 +40,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+
 TARGET_COLUMN = "y"
 DATE_COLUMN = "Date"
 PREDICTION_TARGET_COLUMN = "y_next"
+RETURN_COLUMN_CANDIDATES = ("Return", "Log_Return")
 RANDOM_STATE = 42
 
 
@@ -117,15 +124,26 @@ def build_model_dataset(
         metadata["input_date"] = df[DATE_COLUMN]
         metadata["target_date"] = df[DATE_COLUMN].shift(-horizon)
 
+    return_column = next(
+        (col for col in RETURN_COLUMN_CANDIDATES if col in df.columns),
+        None,
+    )
+    if return_column:
+        metadata["target_return"] = df[return_column].shift(-horizon)
+        metadata["return_type"] = return_column
+
     model_df = model_df.join(metadata)
     required_columns = numeric_feature_columns + [PREDICTION_TARGET_COLUMN]
     model_df = model_df.dropna(subset=required_columns)
 
     X = model_df[numeric_feature_columns]
     y = model_df[PREDICTION_TARGET_COLUMN].astype(int)
-    prediction_metadata = model_df[
-        [col for col in ["input_date", "target_date"] if col in model_df.columns]
+    metadata_columns = [
+        col
+        for col in ["input_date", "target_date", "target_return", "return_type"]
+        if col in model_df.columns
     ]
+    prediction_metadata = model_df[metadata_columns]
 
     return X, y, prediction_metadata
 
@@ -195,7 +213,7 @@ def save_predictions(
     y_pred: pd.Series,
     rise_probability: pd.Series,
     output_path: Path,
-) -> None:
+) -> pd.DataFrame:
     prediction_df = pd.DataFrame(
         {
             "y_true": y.values,
@@ -212,6 +230,146 @@ def save_predictions(
         )
 
     prediction_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+    return prediction_df
+
+
+def save_return_comparison(
+    prediction_df: pd.DataFrame,
+    output_dir: Path,
+) -> Path | None:
+    if "target_return" not in prediction_df.columns:
+        return None
+
+    return_type = (
+        prediction_df["return_type"].iloc[0]
+        if "return_type" in prediction_df.columns
+        else "Return"
+    )
+    plot_df = prediction_df.copy()
+    plot_df["target_return"] = pd.to_numeric(
+        plot_df["target_return"], errors="coerce"
+    )
+    plot_df = plot_df.dropna(subset=["target_return"])
+    if plot_df.empty:
+        return None
+
+    if return_type == "Log_Return":
+        plot_df["buy_and_hold_cumulative_return"] = np.exp(
+            plot_df["target_return"].cumsum()
+        ) - 1
+        plot_df["strategy_return"] = np.where(
+            plot_df["y_pred"] == 1,
+            plot_df["target_return"],
+            0.0,
+        )
+        plot_df["model_strategy_cumulative_return"] = np.exp(
+            plot_df["strategy_return"].cumsum()
+        ) - 1
+    else:
+        plot_df["buy_and_hold_cumulative_return"] = (
+            1 + plot_df["target_return"]
+        ).cumprod() - 1
+        plot_df["strategy_return"] = np.where(
+            plot_df["y_pred"] == 1,
+            plot_df["target_return"],
+            0.0,
+        )
+        plot_df["model_strategy_cumulative_return"] = (
+            1 + plot_df["strategy_return"]
+        ).cumprod() - 1
+
+    csv_path = output_dir / "return_comparison.csv"
+    plot_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+    x_values = (
+        pd.to_datetime(plot_df["target_date"])
+        if "target_date" in plot_df.columns
+        else plot_df.index
+    )
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.plot(
+        x_values,
+        plot_df["buy_and_hold_cumulative_return"],
+        label="Buy and hold",
+        linewidth=2,
+    )
+    ax.plot(
+        x_values,
+        plot_df["model_strategy_cumulative_return"],
+        label="Model strategy",
+        linewidth=2,
+    )
+    ax.axhline(0, color="black", linewidth=0.8, alpha=0.5)
+    ax.set_title("Cumulative Return Comparison")
+    ax.set_xlabel("Target date")
+    ax.set_ylabel("Cumulative return")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    chart_path = output_dir / "cumulative_return_comparison.png"
+    fig.savefig(chart_path, dpi=150)
+    plt.close(fig)
+    return chart_path
+
+
+def save_prediction_rate_comparison(
+    prediction_df: pd.DataFrame,
+    output_dir: Path,
+    rolling_window: int = 20,
+) -> Path:
+    plot_df = prediction_df.copy()
+    plot_df["is_correct"] = (plot_df["y_true"] == plot_df["y_pred"]).astype(int)
+    plot_df["model_cumulative_accuracy"] = plot_df["is_correct"].expanding().mean()
+    plot_df["all_rise_cumulative_accuracy"] = (
+        (plot_df["y_true"] == 1).astype(int).expanding().mean()
+    )
+    plot_df["model_rolling_accuracy"] = (
+        plot_df["is_correct"].rolling(rolling_window, min_periods=1).mean()
+    )
+
+    csv_path = output_dir / "prediction_rate_comparison.csv"
+    plot_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+    x_values = (
+        pd.to_datetime(plot_df["target_date"])
+        if "target_date" in plot_df.columns
+        else plot_df.index
+    )
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.plot(
+        x_values,
+        plot_df["model_cumulative_accuracy"],
+        label="Model cumulative accuracy",
+        linewidth=2,
+    )
+    ax.plot(
+        x_values,
+        plot_df["all_rise_cumulative_accuracy"],
+        label="All-rise baseline cumulative accuracy",
+        linewidth=2,
+    )
+    ax.plot(
+        x_values,
+        plot_df["model_rolling_accuracy"],
+        label=f"Model rolling accuracy ({rolling_window})",
+        linewidth=1.5,
+        alpha=0.75,
+    )
+    ax.set_ylim(0, 1)
+    ax.set_title("Prediction Rate Comparison")
+    ax.set_xlabel("Target date")
+    ax.set_ylabel("Accuracy")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+
+    chart_path = output_dir / "prediction_rate_comparison.png"
+    fig.savefig(chart_path, dpi=150)
+    plt.close(fig)
+    return chart_path
 
 
 def save_coefficients(
@@ -259,14 +417,32 @@ def main() -> None:
     coefficients_path = output_dir / "logistic_regression_coefficients.csv"
     metrics_path = output_dir / "logistic_regression_metrics.txt"
 
-    save_predictions(test_metadata, y_test, y_pred, rise_probability, predictions_path)
+    prediction_df = save_predictions(
+        test_metadata,
+        y_test,
+        y_pred,
+        rise_probability,
+        predictions_path,
+    )
     save_coefficients(pipeline, X.columns.tolist(), coefficients_path)
     metrics_path.write_text(metrics_text, encoding="utf-8")
+    return_chart_path = save_return_comparison(prediction_df, output_dir)
+    prediction_rate_chart_path = save_prediction_rate_comparison(
+        prediction_df,
+        output_dir,
+    )
 
     print("\nSaved files")
     print(f"- Predictions: {predictions_path}")
     print(f"- Coefficients: {coefficients_path}")
     print(f"- Metrics: {metrics_path}")
+    if return_chart_path:
+        print(f"- Return chart: {return_chart_path}")
+        print(f"- Return data: {output_dir / 'return_comparison.csv'}")
+    else:
+        print("- Return chart: skipped because no Return or Log_Return column was found.")
+    print(f"- Prediction rate chart: {prediction_rate_chart_path}")
+    print(f"- Prediction rate data: {output_dir / 'prediction_rate_comparison.csv'}")
 
 
 if __name__ == "__main__":
