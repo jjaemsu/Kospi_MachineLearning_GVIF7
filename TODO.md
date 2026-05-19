@@ -3,17 +3,24 @@
 이 파일은 프로젝트의 진행 상황을 트래킹하는 곳입니다. 팀원과 AI 어시스턴트는 작업을 시작하기 전 이 파일을 확인하고, 작업이 완료되면 상태를 업데이트(`[ ]` -> `[x]`) 해야 합니다.
 
 ## 📋 1단계: 데이터 준비 및 탐색 (Data & EDA)
+<<<<<<< Updated upstream
 - [x] **[Data] 코스피 주가 및 거래량/수급 데이터 수집** (`src/data/fetch_price.py`, `src/data/fetch_volume.py`)
   - `FinanceDataReader` 및 `pykrx`를 사용하여 주가, 거래량, 투자자별 수급 데이터를 통합 수집.
 - [X] **[Data] 거시경제 지표 데이터 수집 (선택)**
   - 환율, 금리, S&P500 등 외부 지표 수집.
+=======
+- [x] **[Data] 코스피 주가 데이터 수집 코드 작성** (`src/data/fetch_kospi.py`)
+  - `FinanceDataReader` 또는 `yfinance`를 사용하여 최근 10년 코스피 지수(OHLCV) 일별 데이터 수집 후 `data/` 폴더에 CSV 저장.
+- [x] **[Data] 거시경제 지표 데이터 수집 (선택)**
+  - 환율, 금리, S&P500 등 외부 지표 수집 (`src/data/fetch_macro_market.py`).
+>>>>>>> Stashed changes
 - [ ] **[EDA] 데이터 탐색 및 시각화** (`notebooks/01_eda_basic.ipynb`)
   - 수집된 데이터 결측치 확인 및 기본 차트 시각화.
 
 ## 📋 2단계: 데이터 전처리 및 피처 엔지니어링 (Preprocessing & Features)
 - [ ] **[Preprocess] 데이터 정제 및 결측치 처리** (`src/preprocessing/clean_data.py`)
   - 결측치 처리 및 날짜 포맷 통일.
-- [ ] **[Feature] 기술적 지표(보조지표) 파생 변수 생성** (`src/features/technical_indicators.py`)
+- [x] **[Feature] 기술적 지표(보조지표) 파생 변수 생성** (`src/features/technical_indicators.py`)
   - 이동평균선(MA), RSI, MACD, 볼린저 밴드 등 계산 로직.
 - [ ] **[Feature] 타겟 변수(Label) 생성**
   - 다음 날 종가 상승 시 `1`, 하락 시 `0`으로 방향성 라벨링.

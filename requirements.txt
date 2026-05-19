@@ -9,5 +9,8 @@ OpenDartReader
 pykrx
 python-dotenv
 pandas-datareader
+<<<<<<< Updated upstream
 
 statsmodels
+=======
+>>>>>>> Stashed changes
