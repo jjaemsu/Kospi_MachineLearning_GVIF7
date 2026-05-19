@@ -1,5 +1,5 @@
 """
-KOSPI direction prediction with Logistic Regression.
+KOSPI next-day direction prediction with Logistic Regression.
 
 Run after placing your preprocessed and VIF-pruned CSV file in the project.
 
@@ -16,6 +16,7 @@ Input requirements:
     - y values: rise = 1, fall = 0
     - Date column is allowed and excluded from X
     - Only numeric explanatory variables are used as X
+    - X on day t predicts y on day t+1
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from sklearn.preprocessing import StandardScaler
 
 TARGET_COLUMN = "y"
 DATE_COLUMN = "Date"
+PREDICTION_TARGET_COLUMN = "y_next"
 RANDOM_STATE = 42
 
 
@@ -62,6 +64,12 @@ def parse_args() -> argparse.Namespace:
         default=0.5,
         help="Probability threshold for classifying rise(1). Default: 0.5",
     )
+    parser.add_argument(
+        "--horizon",
+        type=int,
+        default=1,
+        help="Prediction horizon in rows. Default: 1 means X_t predicts y_t+1.",
+    )
     return parser.parse_args()
 
 
@@ -79,7 +87,12 @@ def load_dataset(input_path: Path) -> pd.DataFrame:
     return df
 
 
-def build_feature_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+def build_model_dataset(
+    df: pd.DataFrame, horizon: int
+) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame]:
+    if horizon < 1:
+        raise ValueError("--horizon must be at least 1.")
+
     excluded_columns = {TARGET_COLUMN, DATE_COLUMN}
     candidate_columns = [col for col in df.columns if col not in excluded_columns]
     numeric_feature_columns = (
@@ -89,23 +102,40 @@ def build_feature_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     if not numeric_feature_columns:
         raise ValueError("No numeric explanatory variables were found.")
 
-    model_df = df[numeric_feature_columns + [TARGET_COLUMN]].dropna()
-    X = model_df[numeric_feature_columns]
-    y = model_df[TARGET_COLUMN].astype(int)
-
-    invalid_targets = sorted(set(y.unique()) - {0, 1})
+    invalid_targets = sorted(set(df[TARGET_COLUMN].dropna().astype(int).unique()) - {0, 1})
     if invalid_targets:
         raise ValueError(
             f"Target column '{TARGET_COLUMN}' must contain only 0 and 1. "
             f"Invalid values: {invalid_targets}"
         )
 
-    return X, y
+    model_df = df[numeric_feature_columns + [TARGET_COLUMN]].copy()
+    model_df[PREDICTION_TARGET_COLUMN] = model_df[TARGET_COLUMN].shift(-horizon)
+
+    metadata = pd.DataFrame(index=df.index)
+    if DATE_COLUMN in df.columns:
+        metadata["input_date"] = df[DATE_COLUMN]
+        metadata["target_date"] = df[DATE_COLUMN].shift(-horizon)
+
+    model_df = model_df.join(metadata)
+    required_columns = numeric_feature_columns + [PREDICTION_TARGET_COLUMN]
+    model_df = model_df.dropna(subset=required_columns)
+
+    X = model_df[numeric_feature_columns]
+    y = model_df[PREDICTION_TARGET_COLUMN].astype(int)
+    prediction_metadata = model_df[
+        [col for col in ["input_date", "target_date"] if col in model_df.columns]
+    ]
+
+    return X, y, prediction_metadata
 
 
 def split_time_ordered(
-    X: pd.DataFrame, y: pd.Series, train_ratio: float = 0.8
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    X: pd.DataFrame,
+    y: pd.Series,
+    metadata: pd.DataFrame,
+    train_ratio: float = 0.8,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame]:
     split_index = int(len(X) * train_ratio)
     if split_index <= 0 or split_index >= len(X):
         raise ValueError("Dataset is too small for an 80/20 time-ordered split.")
@@ -114,8 +144,9 @@ def split_time_ordered(
     X_test = X.iloc[split_index:]
     y_train = y.iloc[:split_index]
     y_test = y.iloc[split_index:]
+    test_metadata = metadata.iloc[split_index:]
 
-    return X_train, X_test, y_train, y_test
+    return X_train, X_test, y_train, y_test, test_metadata
 
 
 def make_pipeline() -> Pipeline:
@@ -159,7 +190,7 @@ def format_metrics(y_test: pd.Series, y_pred: pd.Series) -> str:
 
 
 def save_predictions(
-    original_df: pd.DataFrame,
+    metadata: pd.DataFrame,
     y: pd.Series,
     y_pred: pd.Series,
     rise_probability: pd.Series,
@@ -174,8 +205,11 @@ def save_predictions(
         index=y.index,
     )
 
-    if DATE_COLUMN in original_df.columns:
-        prediction_df.insert(0, DATE_COLUMN, original_df.loc[y.index, DATE_COLUMN].values)
+    if not metadata.empty:
+        prediction_df = pd.concat(
+            [metadata.reset_index(drop=True), prediction_df.reset_index(drop=True)],
+            axis=1,
+        )
 
     prediction_df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
@@ -205,8 +239,8 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     df = load_dataset(input_path)
-    X, y = build_feature_matrix(df)
-    X_train, X_test, y_train, y_test = split_time_ordered(X, y)
+    X, y, metadata = build_model_dataset(df, args.horizon)
+    X_train, X_test, y_train, y_test, test_metadata = split_time_ordered(X, y, metadata)
 
     pipeline = make_pipeline()
     pipeline.fit(X_train, y_train)
@@ -225,7 +259,7 @@ def main() -> None:
     coefficients_path = output_dir / "logistic_regression_coefficients.csv"
     metrics_path = output_dir / "logistic_regression_metrics.txt"
 
-    save_predictions(df, y_test, y_pred, rise_probability, predictions_path)
+    save_predictions(test_metadata, y_test, y_pred, rise_probability, predictions_path)
     save_coefficients(pipeline, X.columns.tolist(), coefficients_path)
     metrics_path.write_text(metrics_text, encoding="utf-8")
 
