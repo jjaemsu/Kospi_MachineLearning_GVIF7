@@ -314,7 +314,7 @@ def save_return_comparison(
     return chart_path
 
 
-def save_prediction_rate_comparison(
+def save_prediction_rate(
     prediction_df: pd.DataFrame,
     output_dir: Path,
     rolling_window: int = 20,
@@ -322,14 +322,11 @@ def save_prediction_rate_comparison(
     plot_df = prediction_df.copy()
     plot_df["is_correct"] = (plot_df["y_true"] == plot_df["y_pred"]).astype(int)
     plot_df["model_cumulative_accuracy"] = plot_df["is_correct"].expanding().mean()
-    plot_df["all_rise_cumulative_accuracy"] = (
-        (plot_df["y_true"] == 1).astype(int).expanding().mean()
-    )
     plot_df["model_rolling_accuracy"] = (
         plot_df["is_correct"].rolling(rolling_window, min_periods=1).mean()
     )
 
-    csv_path = output_dir / "prediction_rate_comparison.csv"
+    csv_path = output_dir / "prediction_rate.csv"
     plot_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
     x_values = (
@@ -346,19 +343,13 @@ def save_prediction_rate_comparison(
     )
     ax.plot(
         x_values,
-        plot_df["all_rise_cumulative_accuracy"],
-        label="All-rise baseline cumulative accuracy",
-        linewidth=2,
-    )
-    ax.plot(
-        x_values,
         plot_df["model_rolling_accuracy"],
         label=f"Model rolling accuracy ({rolling_window})",
         linewidth=1.5,
         alpha=0.75,
     )
     ax.set_ylim(0, 1)
-    ax.set_title("Prediction Rate Comparison")
+    ax.set_title("Prediction Rate")
     ax.set_xlabel("Target date")
     ax.set_ylabel("Accuracy")
     ax.legend()
@@ -366,7 +357,7 @@ def save_prediction_rate_comparison(
     fig.autofmt_xdate()
     fig.tight_layout()
 
-    chart_path = output_dir / "prediction_rate_comparison.png"
+    chart_path = output_dir / "prediction_rate.png"
     fig.savefig(chart_path, dpi=150)
     plt.close(fig)
     return chart_path
@@ -427,7 +418,7 @@ def main() -> None:
     save_coefficients(pipeline, X.columns.tolist(), coefficients_path)
     metrics_path.write_text(metrics_text, encoding="utf-8")
     return_chart_path = save_return_comparison(prediction_df, output_dir)
-    prediction_rate_chart_path = save_prediction_rate_comparison(
+    prediction_rate_chart_path = save_prediction_rate(
         prediction_df,
         output_dir,
     )
@@ -442,7 +433,7 @@ def main() -> None:
     else:
         print("- Return chart: skipped because no Return or Log_Return column was found.")
     print(f"- Prediction rate chart: {prediction_rate_chart_path}")
-    print(f"- Prediction rate data: {output_dir / 'prediction_rate_comparison.csv'}")
+    print(f"- Prediction rate data: {output_dir / 'prediction_rate.csv'}")
 
 
 if __name__ == "__main__":
