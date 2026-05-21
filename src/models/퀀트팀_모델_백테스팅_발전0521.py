@@ -1,0 +1,221 @@
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+import optuna
+import warnings
+import os
+import random
+from sklearn.metrics import accuracy_score
+
+GLOBAL_SEED = 777
+
+def set_seed(seed):
+    """파이썬, 넘파이, OS 환경 변수의 모든 난수 생성을 고정합니다."""
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+set_seed(GLOBAL_SEED)
+
+# Optuna 및 XGBoost 경고 메시지 숨김
+warnings.filterwarnings('ignore')
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+class KospiWalkForwardBacktester:
+    def __init__(self, X, y, initial_months=3, tune_months=1):
+        """[백테스터 초기화]"""
+        self.X = X
+        self.y = y
+        # 1개월을 약 21영업일로 계산
+        self.initial_train_size = initial_months * 21
+        self.tune_frequency = tune_months * 21
+        
+        self.results = []
+        self.best_params = None
+        self.best_decay = None
+
+    def _get_sample_weights(self, num_samples, decay_intensity):
+        """[시간 지수 감쇠 가중치 생성] (원본 로직 유지)"""
+        #return np.exp(np.linspace(-decay_intensity, 0, num_samples))
+        return np.power(2, np.linspace(-decay_intensity, 0, num_samples))
+
+    def _get_scale_pos_weight(self, y_train):
+        """[클래스 불균형 가중치 계산] (원본 로직 유지)"""
+        num_neg = (y_train == 0).sum().values[0] if isinstance(y_train, pd.DataFrame) else (y_train == 0).sum()
+        num_pos = (y_train == 1).sum().values[0] if isinstance(y_train, pd.DataFrame) else (y_train == 1).sum()
+        return num_neg / num_pos if num_pos > 0 else 1.0
+
+    def optimize_params(self, X_train_full, y_train_full, n_trials=30):
+        """[Optuna 튜닝 로직 - 최근 20% 단일 검증으로 속도 최적화]"""
+        scale_pos_weight = self._get_scale_pos_weight(y_train_full)
+        
+        # 최근 20%를 검증용으로 분리
+        split_idx = int(len(X_train_full) * 0.8)
+        X_train, X_val = X_train_full.iloc[:split_idx], X_train_full.iloc[split_idx:]
+        y_train, y_val = y_train_full.iloc[:split_idx], y_train_full.iloc[split_idx:]
+
+        def objective(trial):
+            param = {
+                'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+                'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.1, log=True),
+                'max_depth': trial.suggest_int('max_depth', 3, 5),
+                'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+                'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+                'reg_lambda': trial.suggest_float('reg_lambda', 0.1, 10.0, log=True),
+                'scale_pos_weight': scale_pos_weight,
+                'eval_metric': 'logloss',
+                'random_state': GLOBAL_SEED,  # 수정: 하드코딩된 42를 전역 시드로 변경
+                'verbosity': 0 
+            }
+            decay_intensity = trial.suggest_float('decay_intensity', 0.0, 5.0)
+
+            full_weights = self._get_sample_weights(len(X_train_full), decay_intensity)
+            w_train = full_weights[:split_idx]
+
+            model = xgb.XGBClassifier(**param)
+            model.fit(
+                X_train, y_train,
+                sample_weight=w_train, 
+                eval_set=[(X_val, y_val)],
+                verbose=False
+            )
+            
+            preds = model.predict(X_val)
+            return accuracy_score(y_val, preds)
+
+        # 수정: Optuna 내부 탐색기의 무작위성을 통제하기 위해 TPESampler에 시드 주입
+        sampler = optuna.samplers.TPESampler(seed=GLOBAL_SEED)
+        study = optuna.create_study(direction='maximize', sampler=sampler)
+        study.optimize(objective, n_trials=n_trials)
+
+        best_params = study.best_params.copy()
+        best_decay = best_params.pop('decay_intensity')
+        best_params['scale_pos_weight'] = scale_pos_weight
+        best_params['eval_metric'] = 'logloss'
+        best_params['random_state'] = GLOBAL_SEED  # 수정: 하드코딩된 42를 전역 시드로 변경
+
+        return best_params, best_decay
+
+    def run_backtest(self):
+        """[워크포워드 롤링 백테스트 실행]"""
+        total_days = len(self.X)
+        print(f"\n[백테스트 세팅] 총 데이터: {total_days}일 | 초기 학습: {self.initial_train_size}일 | 튜닝 주기: {self.tune_frequency}일\n")
+
+        for t in range(self.initial_train_size, total_days):
+            X_train_t = self.X.iloc[:t]
+            y_train_t = self.y.iloc[:t]
+            
+            X_test_t = self.X.iloc[[t]]
+            y_true_t = self.y.iloc[t].values[0] if isinstance(self.y, pd.DataFrame) else self.y.iloc[t]
+            current_date = self.X.index[t]
+
+            # 1개월마다 파라미터 업데이트
+            days_passed = t - self.initial_train_size
+            if days_passed % self.tune_frequency == 0: # 여기서 한 달에 한 번 하는 작업중 => recall, precision 뽑기에 좋은 구간
+                print(f"[{current_date}] Optuna 튜닝 진행 중... ", end="")
+                self.best_params, self.best_decay = self.optimize_params(X_train_t, y_train_t, n_trials=30)
+                print(f"완료 (최적 감쇠: {self.best_decay:.2f})")
+            
+            # 매일 재학습
+            full_weights = self._get_sample_weights(len(X_train_t), self.best_decay)
+            model = xgb.XGBClassifier(**self.best_params)
+            model.fit(X_train_t, y_train_t, sample_weight=full_weights, verbose=False)
+            
+            # 예측 및 확신도 측정
+            pred_proba = model.predict_proba(X_test_t)[0]
+            prob_up, prob_down = pred_proba[1], pred_proba[0]
+            
+            if prob_up >= 0.5:
+                pred_class, confidence = 1, prob_up
+            else:
+                pred_class, confidence = 0, prob_down
+            
+            is_correct = 1 if pred_class == y_true_t else 0
+            
+            # 오차 유형 분류
+            error_type = ""
+            if y_true_t == 1 and pred_class == 1: error_type = "TP"
+            elif y_true_t == 0 and pred_class == 0: error_type = "TN"
+            elif y_true_t == 0 and pred_class == 1: error_type = "FP"
+            elif y_true_t == 1 and pred_class == 0: error_type = "FN"
+            
+            self.results.append({
+                'Date': current_date,
+                'Actual': y_true_t,
+                'Predicted': pred_class,
+                'Confidence': round(confidence, 4),
+                'Is_Correct': is_correct,
+                'Error_Type': error_type
+            })
+
+        print("\n백테스팅 완료!")
+        results_df = pd.DataFrame(self.results)
+        results_df.set_index('Date', inplace=True)
+        return results_df
+
+def save_backtest_results(results_df, output_prefix="kospi_backtest"):
+    """결과물을 CSV로 저장 및 요약 출력"""
+    daily_csv_path = f"{output_prefix}_daily_results.csv"
+    results_df.to_csv(daily_csv_path)
+    
+    summary = results_df['Error_Type'].value_counts().to_dict()
+    tp, tn = summary.get('TP', 0), summary.get('TN', 0)
+    fp, fn = summary.get('FP', 0), summary.get('FN', 0)
+    
+    total = tp + tn + fp + fn
+    accuracy = (tp + tn) / total * 100 if total > 0 else 0
+    tn_rate = (tn / (tn + fp)) * 100 if (tn + fp) > 0 else 0
+    
+    summary_df = pd.DataFrame({
+        'Metric': ['True Positive (TP)', 'True Negative (TN)', 'False Positive (FP)', 'False Negative (FN)', '방어율 (TN Rate)', 'Total Accuracy(%)'],
+        'Count': [tp, tn, fp, fn, f"{tn_rate:.2f}%", f"{accuracy:.2f}%"],
+        'Description': [
+            '실제 상승 예측 성공', '실제 하락 예측 성공 (방어)', 
+            '상승으로 잘못 예측 (손실)', '하락으로 잘못 예측 (기회비용)',
+            '하락장 중 성공적으로 회피한 비율', '전체 테스트 기간 정확도'
+        ]
+    })
+    
+    summary_csv_path = f"{output_prefix}_summary_matrix.csv"
+    summary_df.to_csv(summary_csv_path, index=False)
+    
+    print(f"\n[저장 완료] 일일 상세 결과: {daily_csv_path}")
+    print(f"[저장 완료] 총괄 오차 요약: {summary_csv_path}")
+    print("\n--- 백테스트 성과 요약 ---")
+    print(summary_df.to_string(index=False))
+
+# ==========================================
+# 실행부 (단일 CSV 파일만으로 모든 작업 수행)
+# ==========================================
+if __name__ == "__main__":
+    file_name = 'train_data.csv'
+    kospi_data = 'kospi_data.csv'
+    
+    if not os.path.exists(file_name) and (not os.path.exists(kospi_data)):
+        print(f"오류: '{file_name}' 또는 '{kospi_data}' 파일이 없습니다. 파이썬 파일과 같은 폴더에 위치시켜주세요.")
+    else:
+        print(f"'{file_name}' 과 '{kospi_data}' 데이터를 성공적으로 불러왔습니다.")
+        df = pd.read_csv(file_name)
+        
+        if 'Date' in df.columns:
+            df.set_index('Date', inplace=True)
+        
+        # ==========================================
+        # ★ 핵심 포인트: Close(종가)를 이용한 정답지 자동 생성
+        # ==========================================
+        # '내일의 종가(shift(-1))'가 '오늘의 종가'보다 높으면 1(상승), 아니면 0(하락)으로 정답(Target)을 만듭니다.
+        
+        # 마지막 날짜는 '내일' 데이터가 없으므로 계산할 수 없어 삭제합니다.
+        df.dropna(inplace=True)
+        
+        # 모델의 정답지(y)와 학습 데이터(X)를 분리합니다.
+        y = df['Target']
+        X = df.drop(columns=['Target']) 
+        
+        # 백테스터 실행 (첫 3개월 학습, 1개월마다 튜닝)
+        backtester = KospiWalkForwardBacktester(X, y, initial_months=3, tune_months=1)
+        results = backtester.run_backtest()
+        
+        # 결과 저장
+        save_backtest_results(results, output_prefix="kospi_final")
