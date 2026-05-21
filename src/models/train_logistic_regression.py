@@ -51,7 +51,7 @@ import matplotlib.pyplot as plt
 TARGET_COLUMN = "y"
 DATE_COLUMN = "Date"
 PREDICTION_TARGET_COLUMN = "y_next"
-RETURN_COLUMN_CANDIDATES = ("Return", "Log_Return")
+RETURN_COLUMN_CANDIDATES = ("Return", "Log_Return", "price_Log_Return")
 RANDOM_STATE = 42
 
 
@@ -74,6 +74,15 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.5,
         help="Probability threshold for classifying rise(1). Default: 0.5",
+    )
+    parser.add_argument(
+        "--trade-entry-threshold",
+        type=float,
+        default=0.52,
+        help=(
+            "Rise probability threshold for entering the long-only strategy. "
+            "Default: 0.52 means probabilities below 0.52 stay in cash."
+        ),
     )
     parser.add_argument(
         "--horizon",
@@ -373,6 +382,7 @@ def save_predictions(prediction_df: pd.DataFrame, output_path: Path) -> None:
 def save_return_comparison(
     prediction_df: pd.DataFrame,
     output_dir: Path,
+    trade_entry_threshold: float,
 ) -> Path | None:
     if "target_return" not in prediction_df.columns:
         return None
@@ -390,12 +400,18 @@ def save_return_comparison(
     if plot_df.empty:
         return None
 
-    if return_type == "Log_Return":
+    plot_df["strategy_position"] = np.where(
+        plot_df["rise_probability"] >= trade_entry_threshold,
+        1,
+        0,
+    )
+
+    if return_type in {"Log_Return", "price_Log_Return"}:
         plot_df["buy_and_hold_cumulative_return"] = np.exp(
             plot_df["target_return"].cumsum()
         ) - 1
         plot_df["strategy_return"] = np.where(
-            plot_df["y_pred"] == 1,
+            plot_df["strategy_position"] == 1,
             plot_df["target_return"],
             0.0,
         )
@@ -407,7 +423,7 @@ def save_return_comparison(
             1 + plot_df["target_return"]
         ).cumprod() - 1
         plot_df["strategy_return"] = np.where(
-            plot_df["y_pred"] == 1,
+            plot_df["strategy_position"] == 1,
             plot_df["target_return"],
             0.0,
         )
@@ -433,7 +449,7 @@ def save_return_comparison(
     ax.plot(
         x_values,
         plot_df["model_strategy_cumulative_return"],
-        label="Model strategy",
+        label=f"Model strategy (P(up) >= {trade_entry_threshold:.2f})",
         linewidth=2,
     )
     ax.axhline(0, color="black", linewidth=0.8, alpha=0.5)
@@ -548,7 +564,11 @@ def main() -> None:
     save_predictions(prediction_df, predictions_path)
     save_coefficients(pipeline, X.columns.tolist(), coefficients_path)
     metrics_path.write_text(metrics_text, encoding="utf-8")
-    return_chart_path = save_return_comparison(prediction_df, output_dir)
+    return_chart_path = save_return_comparison(
+        prediction_df,
+        output_dir,
+        args.trade_entry_threshold,
+    )
     prediction_rate_chart_path = save_prediction_rate(
         prediction_df,
         output_dir,
