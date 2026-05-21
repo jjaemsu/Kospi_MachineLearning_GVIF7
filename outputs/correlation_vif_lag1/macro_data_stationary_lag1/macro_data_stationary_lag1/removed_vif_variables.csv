@@ -1,0 +1,3 @@
+﻿Step,RemovedVariable,VIFAtRemoval,Reason
+1,KR_Interest_Rate_10Y__diff1,999999.9999712444,Highest remaining VIF >= 10
+2,US_Interest_Rate_10Y__diff1,999999.9999712444,Highest remaining VIF >= 10
