@@ -10,6 +10,10 @@ Optional:
     python src/models/train_logistic_regression.py \
         --input data/your_file.csv \
         --output-dir outputs/logistic_regression
+    python src/models/train_logistic_regression.py \
+        --input data/your_file.csv \
+        --validation-mode walk_forward \
+        --initial-train-ratio 0.8
 
 Input requirements:
     - Target column: y
@@ -76,6 +80,34 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Prediction horizon in rows. Default: 1 means X_t predicts y_t+1.",
+    )
+    parser.add_argument(
+        "--validation-mode",
+        choices=["walk_forward", "holdout"],
+        default="walk_forward",
+        help=(
+            "Validation method. walk_forward retrains on all past rows before each "
+            "test prediction. holdout trains once on the first train ratio. "
+            "Default: walk_forward."
+        ),
+    )
+    parser.add_argument(
+        "--initial-train-ratio",
+        type=float,
+        default=0.8,
+        help=(
+            "Initial train ratio for walk-forward or holdout split. "
+            "Default: 0.8."
+        ),
+    )
+    parser.add_argument(
+        "--initial-train-size",
+        type=int,
+        default=None,
+        help=(
+            "Optional fixed number of initial training rows for walk-forward. "
+            "If set, this overrides --initial-train-ratio."
+        ),
     )
     return parser.parse_args()
 
@@ -167,6 +199,27 @@ def split_time_ordered(
     return X_train, X_test, y_train, y_test, test_metadata
 
 
+def get_initial_train_size(
+    n_rows: int,
+    initial_train_ratio: float,
+    initial_train_size: int | None,
+) -> int:
+    if initial_train_size is not None:
+        split_index = initial_train_size
+    else:
+        if not 0 < initial_train_ratio < 1:
+            raise ValueError("--initial-train-ratio must be between 0 and 1.")
+        split_index = int(n_rows * initial_train_ratio)
+
+    if split_index <= 0 or split_index >= n_rows:
+        raise ValueError(
+            "Initial training size must leave at least one row for both "
+            "training and walk-forward testing."
+        )
+
+    return split_index
+
+
 def make_pipeline() -> Pipeline:
     return Pipeline(
         steps=[
@@ -181,6 +234,88 @@ def make_pipeline() -> Pipeline:
             ),
         ]
     )
+
+
+def run_holdout_validation(
+    X: pd.DataFrame,
+    y: pd.Series,
+    metadata: pd.DataFrame,
+    threshold: float,
+    train_ratio: float,
+) -> tuple[pd.DataFrame, Pipeline]:
+    X_train, X_test, y_train, y_test, test_metadata = split_time_ordered(
+        X, y, metadata, train_ratio=train_ratio
+    )
+
+    pipeline = make_pipeline()
+    pipeline.fit(X_train, y_train)
+
+    rise_probability = pd.Series(
+        pipeline.predict_proba(X_test)[:, 1],
+        index=y_test.index,
+        name="rise_probability",
+    )
+    y_pred = (rise_probability >= threshold).astype(int)
+
+    prediction_df = build_prediction_frame(
+        test_metadata,
+        y_test,
+        y_pred,
+        rise_probability,
+    )
+
+    return prediction_df, pipeline
+
+
+def run_walk_forward_validation(
+    X: pd.DataFrame,
+    y: pd.Series,
+    metadata: pd.DataFrame,
+    threshold: float,
+    initial_train_ratio: float,
+    initial_train_size: int | None,
+) -> tuple[pd.DataFrame, Pipeline]:
+    split_index = get_initial_train_size(
+        len(X),
+        initial_train_ratio,
+        initial_train_size,
+    )
+
+    prediction_rows = []
+    final_pipeline: Pipeline | None = None
+
+    for test_position in range(split_index, len(X)):
+        X_train = X.iloc[:test_position]
+        y_train = y.iloc[:test_position]
+        X_test = X.iloc[[test_position]]
+        y_test = y.iloc[[test_position]]
+        test_metadata = metadata.iloc[[test_position]]
+
+        pipeline = make_pipeline()
+        pipeline.fit(X_train, y_train)
+        final_pipeline = pipeline
+
+        rise_probability = pd.Series(
+            pipeline.predict_proba(X_test)[:, 1],
+            index=y_test.index,
+            name="rise_probability",
+        )
+        y_pred = (rise_probability >= threshold).astype(int)
+
+        prediction_rows.append(
+            build_prediction_frame(
+                test_metadata,
+                y_test,
+                y_pred,
+                rise_probability,
+            )
+        )
+
+    if final_pipeline is None:
+        raise ValueError("Walk-forward validation did not produce any predictions.")
+
+    prediction_df = pd.concat(prediction_rows, ignore_index=True)
+    return prediction_df, final_pipeline
 
 
 def format_metrics(y_test: pd.Series, y_pred: pd.Series) -> str:
@@ -207,12 +342,11 @@ def format_metrics(y_test: pd.Series, y_pred: pd.Series) -> str:
     )
 
 
-def save_predictions(
+def build_prediction_frame(
     metadata: pd.DataFrame,
     y: pd.Series,
     y_pred: pd.Series,
     rise_probability: pd.Series,
-    output_path: Path,
 ) -> pd.DataFrame:
     prediction_df = pd.DataFrame(
         {
@@ -229,8 +363,11 @@ def save_predictions(
             axis=1,
         )
 
-    prediction_df.to_csv(output_path, index=False, encoding="utf-8-sig")
     return prediction_df
+
+
+def save_predictions(prediction_df: pd.DataFrame, output_path: Path) -> None:
+    prediction_df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
 
 def save_return_comparison(
@@ -382,32 +519,33 @@ def main() -> None:
 
     df = load_dataset(input_path)
     X, y, metadata = build_model_dataset(df, args.horizon)
-    X_train, X_test, y_train, y_test, test_metadata = split_time_ordered(X, y, metadata)
 
-    pipeline = make_pipeline()
-    pipeline.fit(X_train, y_train)
+    if args.validation_mode == "walk_forward":
+        prediction_df, pipeline = run_walk_forward_validation(
+            X,
+            y,
+            metadata,
+            args.threshold,
+            args.initial_train_ratio,
+            args.initial_train_size,
+        )
+    else:
+        prediction_df, pipeline = run_holdout_validation(
+            X,
+            y,
+            metadata,
+            args.threshold,
+            args.initial_train_ratio,
+        )
 
-    rise_probability = pd.Series(
-        pipeline.predict_proba(X_test)[:, 1],
-        index=y_test.index,
-        name="rise_probability",
-    )
-    y_pred = (rise_probability >= args.threshold).astype(int)
-
-    metrics_text = format_metrics(y_test, y_pred)
+    metrics_text = format_metrics(prediction_df["y_true"], prediction_df["y_pred"])
     print(metrics_text)
 
     predictions_path = output_dir / "logistic_regression_test_predictions.csv"
     coefficients_path = output_dir / "logistic_regression_coefficients.csv"
     metrics_path = output_dir / "logistic_regression_metrics.txt"
 
-    prediction_df = save_predictions(
-        test_metadata,
-        y_test,
-        y_pred,
-        rise_probability,
-        predictions_path,
-    )
+    save_predictions(prediction_df, predictions_path)
     save_coefficients(pipeline, X.columns.tolist(), coefficients_path)
     metrics_path.write_text(metrics_text, encoding="utf-8")
     return_chart_path = save_return_comparison(prediction_df, output_dir)
