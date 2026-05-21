@@ -317,13 +317,13 @@ def save_return_comparison(
 def save_prediction_rate(
     prediction_df: pd.DataFrame,
     output_dir: Path,
-    rolling_window: int = 20,
 ) -> Path:
     plot_df = prediction_df.copy()
     plot_df["is_correct"] = (plot_df["y_true"] == plot_df["y_pred"]).astype(int)
-    plot_df["model_cumulative_accuracy"] = plot_df["is_correct"].expanding().mean()
-    plot_df["model_rolling_accuracy"] = (
-        plot_df["is_correct"].rolling(rolling_window, min_periods=1).mean()
+    plot_df["prediction_count"] = np.arange(1, len(plot_df) + 1)
+    plot_df["correct_count"] = plot_df["is_correct"].cumsum()
+    plot_df["model_accuracy_to_date"] = (
+        plot_df["correct_count"] / plot_df["prediction_count"]
     )
 
     csv_path = output_dir / "prediction_rate.csv"
@@ -337,16 +337,9 @@ def save_prediction_rate(
     fig, ax = plt.subplots(figsize=(11, 6))
     ax.plot(
         x_values,
-        plot_df["model_cumulative_accuracy"],
-        label="Model cumulative accuracy",
+        plot_df["model_accuracy_to_date"],
+        label="Model accuracy to date",
         linewidth=2,
-    )
-    ax.plot(
-        x_values,
-        plot_df["model_rolling_accuracy"],
-        label=f"Model rolling accuracy ({rolling_window})",
-        linewidth=1.5,
-        alpha=0.75,
     )
     ax.set_ylim(0, 1)
     ax.set_title("Prediction Rate")
