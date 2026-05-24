@@ -1,106 +1,211 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+import os
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
-# 1. 코스피 데이터 가져오기 (최근 10년)
-kospi_data = yf.Ticker("^KS11").history(period="10y")
-# 시계열 데이터를 맞추기 위해 시간대(timezone) 정보 제거
-kospi_data.index = kospi_data.index.tz_localize(None) 
+# =========================
+# CONFIGURATION
+# =========================
+BACKTEST_START_DATE = "2023-11-01"
+INITIAL_CAPITAL = 1_000_000
+TRADING_DAYS = 252
 
-# 2. 백테스팅 결과 데이터 불러오기
-df = pd.read_csv(r'C:\Users\이찬수\Desktop\gvif\outputs\walk_forward_predictions.csv')
-df['Date'] = pd.to_datetime(df['Date'])
-df.set_index('Date', inplace=True)
+# 백테스팅을 수행할 모델과 해당 예측 결과 파일 경로 매핑
+MODEL_CONFIGS = {
+    "LSTM": {"path": "outputs/walk_forward_predictions.csv", "buy_thr": 0.55, "sell_thr": 0.45},
+    "Random_Forest": {"path": "outputs/rf_walk_forward_results.csv", "buy_thr": 0.55, "sell_thr": 0.45},
+    "XGBoost": {"path": "outputs/xgb_results.csv", "buy_thr": 0.50, "sell_thr": 0.50},
+    "Logistic_Regression": {"path": "outputs/logistic_regression_walk_forward.csv", "buy_thr": 0.52, "sell_thr": 0.48},
+    "LightGBM": {"path": "outputs/lgbm_walk_forward_results.csv", "buy_thr": 0.55, "sell_thr": 0.45}
+}
 
-# 3. 코스피 지수와 모델 예측 데이터 병합
-merged_data = kospi_data[['Close']].join(df, how='inner')
+def calculate_mdd(equity_curve):
+    running_max = equity_curve.cummax()
+    drawdown = (equity_curve - running_max) / running_max
+    return drawdown.min()
 
-# 4. 백테스팅 로직 적용 및 로그 출력
-initial_capital = 1000000
-cash = initial_capital
-shares = 0
-portfolio_values = []
+def calculate_sharpe(daily_returns):
+    if daily_returns.std() == 0:
+        return 0
+    return (daily_returns.mean() / daily_returns.std()) * np.sqrt(TRADING_DAYS)
 
-buy_dates = []
-buy_prices = []
-sell_dates = []
-sell_prices = []
+def run_backtest_for_model(model_name, config):
+    input_csv = config["path"]
+    buy_thr = config["buy_thr"]
+    sell_thr = config["sell_thr"]
+    
+    # 1. 코스피 데이터 가져오기
+    try:
+        # 넉넉하게 가져와서 필터링
+        kospi_data = yf.Ticker("^KS11").history(period="10y")
+        kospi_data.index = kospi_data.index.tz_localize(None) 
+    except Exception as e:
+        print(f"[{model_name}] KOSPI 데이터 다운로드 실패: {e}")
+        return None
 
-current_state = 0 # 0: 현금, 1: 주식 보유
+    # 2. 백테스팅 결과 데이터 불러오기
+    if not os.path.exists(input_csv):
+        print(f"[{model_name}] 예측 파일이 없습니다. (건너뜀): {input_csv}")
+        return None
 
-print(f"--- Backtesting Start (Initial Capital: {initial_capital:,.0f} KRW) ---")
-log_lines = []
+    df = pd.read_csv(input_csv)
+    df['Date'] = pd.to_datetime(df['Date'])
+    df.set_index('Date', inplace=True)
 
-for date, row in merged_data.iterrows():
-    price = row['Close']
-    confidence = row['Probability_Up']
-    predicted = row['Predicted_Target']
+    # 컬럼명 매핑 (통합 처리)
+    mapping = {
+        'prob_up': 'Probability_Up',
+        'Probability_Up': 'Probability_Up',
+        'Probability_Target': 'Probability_Up',
+        'Confidence': 'Confidence',
+        'predicted': 'Predicted_Target',
+        'Predicted_Target': 'Predicted_Target',
+        'Predicted': 'Predicted_Target',
+        'Actual_Target': 'Actual_Target',
+        'Actual': 'Actual_Target',
+        'actual': 'Actual_Target'
+    }
+    for old_col, new_col in mapping.items():
+        if old_col in df.columns and old_col != new_col:
+            df[new_col] = df[old_col]
 
-    if predicted == 1 and current_state == 0 and confidence >= 0.55:
-        # 매수 로그
-        shares = cash / price
-        log = f"[{date.date()}] BUY  | Price: {price:,.2f} | Shares: {shares:.4f} | All-in"
-        print(log)
-        log_lines.append(log)
-        cash = 0
-        current_state = 1
-        buy_dates.append(date)
-        buy_prices.append(price)
+    # Confidence 보정
+    if 'Confidence' in df.columns and 'Probability_Up' not in df.columns:
+        df['Probability_Up'] = df.apply(lambda x: x['Confidence'] if x['Predicted_Target'] == 1 else 1 - x['Confidence'], axis=1)
 
-    elif predicted == 0 and current_state == 1 and confidence < 0.45:
-        # 매도 로그
-        cash = shares * price
-        log = f"[{date.date()}] SELL | Price: {price:,.2f} | Realized: {cash:,.0f} KRW"
-        print(log)
-        log_lines.append(log)
-        shares = 0
-        current_state = 0
-        sell_dates.append(date)
-        sell_prices.append(price)
+    # 3. 기간 필터링 및 병합 (2023-09-01 기준)
+    merged_data = kospi_data[['Close']].join(df, how='inner')
+    merged_data = merged_data[merged_data.index >= BACKTEST_START_DATE]
 
-    current_value = cash + (shares * price if shares > 0 else 0)
-    portfolio_values.append(current_value)
+    if merged_data.empty:
+        print(f"[{model_name}] 지정된 시작일({BACKTEST_START_DATE}) 이후 데이터가 없습니다.")
+        return None
 
-merged_data['Portfolio_Value'] = portfolio_values
-merged_data['Strategy_Return_Pct'] = (merged_data['Portfolio_Value'] / initial_capital - 1) * 100
+    print(f"\n========== [{model_name}] 백테스트 시작 (기간: {merged_data.index[0].date()} ~ {merged_data.index[-1].date()}) ==========")
 
-# Calculate KOSPI Buy & Hold Cumulative Return for baseline comparison
-kospi_initial = merged_data['Close'].iloc[0]
-merged_data['KOSPI_Buy_Hold_Pct'] = (merged_data['Close'] / kospi_initial - 1) * 100
+    # 4. 백테스팅 로직
+    cash = INITIAL_CAPITAL
+    shares = 0
+    portfolio_values = []
+    current_state = 0 # 0: 현금, 1: 주식
+    
+    buy_signals = []
+    sell_signals = []
+    trade_returns = []
+    last_buy_price = 0
 
-final_value = merged_data['Portfolio_Value'].iloc[-1]
-kospi_final_return = merged_data['KOSPI_Buy_Hold_Pct'].iloc[-1]
+    for date, row in merged_data.iterrows():
+        price = row['Close']
+        prob_up = row['Probability_Up']
+        predicted = row['Predicted_Target']
 
-end_log = f"\n--- Backtesting End ---\nFinal Asset Value: {final_value:,.2f} (Strategy Return: {(final_value/initial_capital - 1)*100:.2f}% | KOSPI B&H Return: {kospi_final_return:.2f}%)"
-print(end_log)
-log_lines.append(end_log)
+        is_buy = False
+        is_sell = False
 
-# Save logs to file
-with open('outputs/backtest_log.txt', 'w', encoding='utf-8') as f:
-    f.write('\n'.join(log_lines))
+        if model_name == "XGBoost":
+            confidence = prob_up if predicted == 1 else (1 - prob_up)
+            if confidence >= buy_thr:
+                if predicted == 1 and current_state == 0: is_buy = True
+                elif predicted == 0 and current_state == 1: is_sell = True
+        else:
+            if predicted == 1 and current_state == 0 and prob_up >= buy_thr: is_buy = True
+            elif predicted == 0 and current_state == 1 and prob_up < sell_thr: is_sell = True
 
-# 5. Plotly 누적 수익률 비교 차트 저장
-fig = go.Figure()
+        if is_buy:
+            shares = cash / price
+            cash = 0
+            current_state = 1
+            buy_signals.append(date)
+            last_buy_price = price
+        elif is_sell:
+            cash = shares * price
+            trade_returns.append(cash / (shares * last_buy_price) - 1)
+            shares = 0
+            current_state = 0
+            sell_signals.append(date)
 
-# KOSPI 단순 보유 수익률 (Baseline)
-fig.add_trace(go.Scatter(x=merged_data.index, y=merged_data['KOSPI_Buy_Hold_Pct'], 
-                         mode='lines', name='KOSPI Buy & Hold (%)', line=dict(color='gray', width=2, dash='dash')))
+        current_value = cash + (shares * price if shares > 0 else 0)
+        portfolio_values.append(current_value)
 
-# LSTM 전략 수익률
-fig.add_trace(go.Scatter(x=merged_data.index, y=merged_data['Strategy_Return_Pct'], 
-                         mode='lines', name='LSTM Strategy (%)', line=dict(color='blue', width=2.5)))
+    merged_data['Portfolio_Value'] = portfolio_values
+    merged_data['Strategy_Return_Pct'] = (merged_data['Portfolio_Value'] / INITIAL_CAPITAL - 1) * 100
+    
+    kospi_initial = merged_data['Close'].iloc[0]
+    merged_data['KOSPI_Return_Pct'] = (merged_data['Close'] / kospi_initial - 1) * 100
 
-# 수익률이 0인 기준선 추가
-fig.add_hline(y=0, line_dash="solid", line_color="black", line_width=1)
+    # 5. 지표 계산
+    # ML 지표
+    y_true = merged_data['Actual_Target'].astype(int)
+    y_pred = merged_data['Predicted_Target'].astype(int)
+    acc = accuracy_score(y_true, y_pred)
+    prec = precision_score(y_true, y_pred, zero_division=0)
+    rec = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
 
-fig.update_layout(
-    title='Cumulative Return Comparison: LSTM Strategy vs KOSPI Buy & Hold', 
-    xaxis_title='Date', 
-    yaxis_title='Cumulative Return (%)', 
-    template='plotly_white',
-    hovermode="x unified",
-    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-)
+    # 재무 지표
+    final_return = merged_data['Strategy_Return_Pct'].iloc[-1]
+    kospi_final_return = merged_data['KOSPI_Return_Pct'].iloc[-1]
+    mdd = calculate_mdd(merged_data['Portfolio_Value']) * 100
+    daily_rets = merged_data['Portfolio_Value'].pct_change().fillna(0)
+    sharpe = calculate_sharpe(daily_rets)
+    total_trades = len(buy_signals)
 
-fig.write_html('outputs/cumulative_return_chart.html')
-print("누적 수익률 비교 차트가 outputs/cumulative_return_chart.html 로 저장되었습니다.")
+    metrics = {
+        "Model": model_name,
+        "Accuracy": acc,
+        "Precision": prec,
+        "Recall": rec,
+        "F1-Score": f1,
+        "Strategy_Return(%)": final_return,
+        "KOSPI_Return(%)": kospi_final_return,
+        "MDD(%)": mdd,
+        "Sharpe_Ratio": sharpe,
+        "Total_Trades": total_trades
+    }
+
+    # 6. 시각화
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=merged_data.index, y=merged_data['KOSPI_Return_Pct'], 
+                             mode='lines', name='KOSPI (Benchmark) %', line=dict(color='lightgray', dash='dash')))
+    fig.add_trace(go.Scatter(x=merged_data.index, y=merged_data['Strategy_Return_Pct'], 
+                             mode='lines', name=f'{model_name} Strategy %', line=dict(color='blue', width=2)))
+    
+    if buy_signals:
+        fig.add_trace(go.Scatter(x=buy_signals, y=[merged_data.loc[d, 'Strategy_Return_Pct'] for d in buy_signals],
+                                 mode='markers', name='Buy', marker=dict(color='red', size=10, symbol='triangle-up'), hoverinfo='skip'))
+    if sell_signals:
+        fig.add_trace(go.Scatter(x=sell_signals, y=[merged_data.loc[d, 'Strategy_Return_Pct'] for d in sell_signals],
+                                 mode='markers', name='Sell', marker=dict(color='blue', size=10, symbol='triangle-down'), hoverinfo='skip'))
+
+    fig.update_layout(
+        title=f"<b>{model_name} Backtest</b> (From {BACKTEST_START_DATE})<br>" +
+              f"<span style='font-size:12px;'>ML: Acc {acc:.2%}, Prec {prec:.2%}, F1 {f1:.2f} | " +
+              f"Fin: Return {final_return:.2f}%, MDD {mdd:.2f}%, Sharpe {sharpe:.2f}</span>",
+        xaxis_title='Date', yaxis_title='Cumulative Return (%)', template='plotly_white', hovermode="x unified"
+    )
+
+    output_dir = "outputs/데이터 시각화"
+    os.makedirs(output_dir, exist_ok=True)
+    fig.write_html(os.path.join(output_dir, f"backtest_chart_{model_name.lower()}.html"))
+    print(f"[{model_name}] 리포트 저장 완료.")
+    
+    return metrics
+
+def main():
+    print(f"백테스트 기간 통일 ({BACKTEST_START_DATE} ~ ) 및 지표 산출을 시작합니다...")
+    all_metrics = []
+    for model_name, config in MODEL_CONFIGS.items():
+        m = run_backtest_for_model(model_name, config)
+        if m: all_metrics.append(m)
+    
+    if all_metrics:
+        summary_df = pd.DataFrame(all_metrics)
+        summary_path = "outputs/데이터 시각화/models_summary_report.csv"
+        summary_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
+        print(f"\n전체 모델 비교 리포트 저장 완료: {summary_path}")
+        print(summary_df.drop(columns=['Accuracy', 'Precision', 'Recall', 'F1-Score']).to_string(index=False))
+
+if __name__ == "__main__":
+    main()

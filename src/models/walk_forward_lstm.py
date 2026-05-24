@@ -17,7 +17,7 @@ from tqdm import tqdm
 CONFIG = {
     'data_dir': 'data',
     'lookback': 10,                 # 시퀀스 길이 (과거 며칠의 데이터를 보고 예측할 것인가)
-    'initial_train_days': 120,      # 최초 모델을 학습시킬 기초 데이터 기간 (일)
+    'initial_train_days': 63,       # 최초 모델을 학습시킬 기초 데이터 기간 (일)
     'initial_epochs': 50,           # 최초 학습 시 반복할 에포크 수
     'finetune_epochs': 1,           # 이후 매일 1일치 전진하면서 추가로 학습(파인튜닝)할 에포크 수
     'batch_size': 32,               # 배치 사이즈
