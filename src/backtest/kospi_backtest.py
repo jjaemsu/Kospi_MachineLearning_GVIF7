@@ -165,31 +165,54 @@ def run_backtest_for_model(model_name, config):
         "Total_Trades": total_trades
     }
 
-    # 6. 시각화
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=merged_data.index, y=merged_data['KOSPI_Return_Pct'], 
-                             mode='lines', name='KOSPI (Benchmark) %', line=dict(color='lightgray', dash='dash')))
-    fig.add_trace(go.Scatter(x=merged_data.index, y=merged_data['Strategy_Return_Pct'], 
-                             mode='lines', name=f'{model_name} Strategy %', line=dict(color='blue', width=2)))
+    # 6. 시각화 (1): 누적 수익률 차트
+    fig_ret = go.Figure()
+    fig_ret.add_trace(go.Scatter(x=merged_data.index, y=merged_data['KOSPI_Return_Pct'], 
+                                 mode='lines', name='KOSPI (Benchmark) %', line=dict(color='lightgray', dash='dash')))
+    fig_ret.add_trace(go.Scatter(x=merged_data.index, y=merged_data['Strategy_Return_Pct'], 
+                                 mode='lines', name=f'{model_name} Strategy %', line=dict(color='blue', width=2)))
     
     if buy_signals:
-        fig.add_trace(go.Scatter(x=buy_signals, y=[merged_data.loc[d, 'Strategy_Return_Pct'] for d in buy_signals],
-                                 mode='markers', name='Buy', marker=dict(color='red', size=10, symbol='triangle-up'), hoverinfo='skip'))
+        fig_ret.add_trace(go.Scatter(x=buy_signals, y=[merged_data.loc[d, 'Strategy_Return_Pct'] for d in buy_signals],
+                                     mode='markers', name='Buy', marker=dict(color='red', size=10, symbol='triangle-up'), hoverinfo='skip'))
     if sell_signals:
-        fig.add_trace(go.Scatter(x=sell_signals, y=[merged_data.loc[d, 'Strategy_Return_Pct'] for d in sell_signals],
-                                 mode='markers', name='Sell', marker=dict(color='blue', size=10, symbol='triangle-down'), hoverinfo='skip'))
+        fig_ret.add_trace(go.Scatter(x=sell_signals, y=[merged_data.loc[d, 'Strategy_Return_Pct'] for d in sell_signals],
+                                     mode='markers', name='Sell', marker=dict(color='blue', size=10, symbol='triangle-down'), hoverinfo='skip'))
 
-    fig.update_layout(
-        title=f"<b>{model_name} Backtest</b> (From {BACKTEST_START_DATE})<br>" +
-              f"<span style='font-size:12px;'>ML: Acc {acc:.2%}, Prec {prec:.2%}, F1 {f1:.2f} | " +
-              f"Fin: Return {final_return:.2f}%, MDD {mdd:.2f}%, Sharpe {sharpe:.2f}</span>",
+    fig_ret.update_layout(
+        title=f"<b>{model_name} Backtest: Cumulative Return</b> (From {BACKTEST_START_DATE})<br>" +
+              f"<span style='font-size:12px;'>Return {final_return:.2f}%, MDD {mdd:.2f}%, Sharpe {sharpe:.2f}</span>",
         xaxis_title='Date', yaxis_title='Cumulative Return (%)', template='plotly_white', hovermode="x unified"
+    )
+
+    # 7. 시각화 (2): 누적 예측 정확도 차트 (Cumulative Accuracy)
+    # 실제값과 예측값이 일치하는지 확인 (1: 맞음, 0: 틀림)
+    merged_data['Is_Correct'] = (merged_data['Actual_Target'] == merged_data['Predicted_Target']).astype(int)
+    # 누적 정확도 계산 (누적 맞춘 개수 / 진행된 날짜 수)
+    merged_data['Cumulative_Accuracy'] = merged_data['Is_Correct'].expanding().mean() * 100
+
+    fig_acc = go.Figure()
+    fig_acc.add_trace(go.Scatter(x=merged_data.index, y=merged_data['Cumulative_Accuracy'],
+                                 mode='lines', name='Cumulative Accuracy (%)', line=dict(color='green', width=2)))
+    
+    # 50% 기준선 (무작위 예측 기준)
+    fig_acc.add_hline(y=50, line_dash="dash", line_color="red", annotation_text="50% (Random)")
+
+    fig_acc.update_layout(
+        title=f"<b>{model_name}: Cumulative Prediction Accuracy</b><br>" +
+              f"<span style='font-size:12px;'>Final Accuracy: {acc:.2%} | F1-Score: {f1:.2f}</span>",
+        xaxis_title='Date', yaxis_title='Accuracy (%)', template='plotly_white',
+        yaxis=dict(range=[min(40, merged_data['Cumulative_Accuracy'].min()), max(60, merged_data['Cumulative_Accuracy'].max())])
     )
 
     output_dir = "outputs/데이터 시각화"
     os.makedirs(output_dir, exist_ok=True)
-    fig.write_html(os.path.join(output_dir, f"backtest_chart_{model_name.lower()}.html"))
-    print(f"[{model_name}] 리포트 저장 완료.")
+    
+    # 파일 저장
+    fig_ret.write_html(os.path.join(output_dir, f"backtest_chart_{model_name.lower()}.html"))
+    fig_acc.write_html(os.path.join(output_dir, f"accuracy_chart_{model_name.lower()}.html"))
+    
+    print(f"[{model_name}] 리포트 및 정확도 차트 저장 완료.")
     
     return metrics
 
