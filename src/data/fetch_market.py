@@ -14,6 +14,7 @@ def fetch_market_data(save_path=None):
         'S&P500': '^GSPC',
         'Nikkei225': '^N225',
         'TaiwanWeighted': '^TWII',
+        'PhlxSemiconductor': '^SOX',
         'USD_KRW': 'USDKRW=X',
         'Dollar_Index': 'DX-Y.NYB',
         'VIX': '^VIX'
