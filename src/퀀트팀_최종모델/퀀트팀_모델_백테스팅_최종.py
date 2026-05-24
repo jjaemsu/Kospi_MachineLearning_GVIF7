@@ -31,25 +31,27 @@ class KospiWalkForwardBacktester:
         self.tune_frequency = tune_months * 25
         
         self.results = []
+        self.feature_importances_records = [] # [요구사항 반영 추가] 25일 주기 피처 중요도 기록용 리스트
         self.best_params = None
         self.best_decay = None
 
     def _get_sample_weights(self, num_samples, decay_intensity):
         """[시간 지수 감쇠 가중치 생성] (원본 로직 유지)"""
         #return np.exp(np.linspace(-decay_intensity, 0, num_samples))
-        return np.power(1.9, np.linspace(-decay_intensity, 0, num_samples))
-
+        return np.power(1.7, np.linspace(-decay_intensity, 0, num_samples))
+    
+    '''
     def _get_scale_pos_weight(self, y_train):
         """[클래스 불균형 가중치 계산] (원본 로직 유지)"""
         num_neg = (y_train == 0).sum().values[0] if isinstance(y_train, pd.DataFrame) else (y_train == 0).sum()
         num_pos = (y_train == 1).sum().values[0] if isinstance(y_train, pd.DataFrame) else (y_train == 1).sum()
         return num_neg / num_pos if num_pos > 0 else 1.0
-
     '''
+    
     def _get_scale_pos_weight(self, y_train):
         """[클래스 불균형 가중치 계산] 인위적인 가중치 보정을 막기 위해 1.0으로 고정"""
         return 1.0
-    '''
+    
 
     def optimize_params(self, X_train_full, y_train_full, n_trials=30):
         """[Optuna 튜닝 로직 - 최근 20% 단일 검증으로 속도 최적화]"""
@@ -128,6 +130,32 @@ class KospiWalkForwardBacktester:
             model = xgb.XGBClassifier(**self.best_params)
             model.fit(X_train_t, y_train_t, sample_weight=full_weights, verbose=False)
             
+            # =========================================================================
+            # [요구사항 반영 추가] 25일 주기마다 상위 10개 피처 중요도 기록
+            # =========================================================================
+            if days_passed % 25 == 0:
+                importances = model.feature_importances_
+                
+                # 피처 개수가 10개보다 적은 예외 상황 방어
+                top_k = min(10, len(self.X.columns)) 
+                # 가장 중요한 피처 인덱스 순 정렬
+                top_indices = np.argsort(importances)[::-1][:top_k]
+                
+                record = {'Date': current_date}
+                # 분석을 용이하게 하기 위해 top1 (피처명) / top1_importance (중요도) 로 분리 기록
+                for i in range(1, 11):
+                    if i <= top_k:
+                        feature_name = self.X.columns[top_indices[i-1]]
+                        importance_score = round(float(importances[top_indices[i-1]]), 4)
+                        record[f'top{i}'] = feature_name
+                        record[f'top{i}_importance'] = importance_score
+                    else:
+                        record[f'top{i}'] = None
+                        record[f'top{i}_importance'] = None
+                        
+                self.feature_importances_records.append(record)
+            # =========================================================================
+            
             # 예측 및 확신도 측정
             pred_proba = model.predict_proba(X_test_t)[0]
             prob_up, prob_down = pred_proba[1], pred_proba[0]
@@ -159,6 +187,19 @@ class KospiWalkForwardBacktester:
         results_df = pd.DataFrame(self.results)
         results_df.set_index('Date', inplace=True)
         return results_df
+    
+    def save_feature_importances(self, output_prefix="kospi_backtest"):
+        """[요구사항 반영 추가] 기록된 피처 중요도를 CSV 파일로 분리 저장하는 메서드"""
+        if not self.feature_importances_records:
+            return
+        
+        fi_df = pd.DataFrame(self.feature_importances_records)
+        fi_df.set_index('Date', inplace=True)
+        
+        fi_csv_path = f"{output_prefix}_top10_feature_importances.csv"
+        fi_df.to_csv(fi_csv_path)
+        print(f"[저장 완료] 25일 주기 피처 중요도 분석표: {fi_csv_path}")
+
 
 def save_backtest_results(results_df, output_prefix="kospi_backtest"):
     """결과물을 CSV로 저장 및 요약 출력"""
@@ -225,3 +266,6 @@ if __name__ == "__main__":
         
         # 결과 저장
         save_backtest_results(results, output_prefix="kospi_final")
+        
+        # [요구사항 반영 추가] 25일 주기 피처 중요도 결과물(CSV) 추가 저장
+        backtester.save_feature_importances(output_prefix="kospi_final")
