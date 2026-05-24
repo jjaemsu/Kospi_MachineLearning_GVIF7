@@ -11,3 +11,5 @@ python-dotenv
 pandas-datareader
 statsmodels
 optuna
+torch
+tqdm
