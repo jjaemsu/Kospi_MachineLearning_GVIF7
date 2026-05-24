@@ -7,7 +7,7 @@ This project contains machine learning models and trading strategies.
 Train and evaluate the Random Forest classifier with lag1 stationary inputs:
 
 ```powershell
-python scripts/train_random_forest.py
+python src/train_random_forest.py
 ```
 
 Outputs are saved under `outputs/`:
