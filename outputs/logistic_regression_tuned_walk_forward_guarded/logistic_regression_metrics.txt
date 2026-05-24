@@ -5,6 +5,7 @@ Balanced Accuracy : 0.542298
 Precision         : 0.704545
 Recall            : 0.626263
 F1-score          : 0.663102
+Probability RMSE  : 0.498323
 
 Baseline Comparison
 -------------------

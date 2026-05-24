@@ -423,6 +423,13 @@ def evaluate_binary_predictions(y_true: pd.Series, y_pred: pd.Series) -> dict[st
     }
 
 
+def calculate_probability_rmse(
+    y_true: pd.Series,
+    rise_probability: pd.Series,
+) -> float:
+    return float(np.sqrt(np.mean((y_true.to_numpy() - rise_probability.to_numpy()) ** 2)))
+
+
 def build_baseline_metrics(y_true: pd.Series) -> pd.DataFrame:
     y_true = y_true.reset_index(drop=True).astype(int)
     majority_class = int(y_true.mode().iloc[0])
@@ -488,8 +495,13 @@ def calculate_return_summary(
     }
 
 
-def format_metrics(y_test: pd.Series, y_pred: pd.Series) -> str:
+def format_metrics(
+    y_test: pd.Series,
+    y_pred: pd.Series,
+    rise_probability: pd.Series,
+) -> str:
     metrics = evaluate_binary_predictions(y_test, y_pred)
+    rmse = calculate_probability_rmse(y_test, rise_probability)
     cm = confusion_matrix(y_test, y_pred)
     report = classification_report(y_test, y_pred, zero_division=0)
     baseline_df = build_baseline_metrics(y_test)
@@ -501,7 +513,8 @@ def format_metrics(y_test: pd.Series, y_pred: pd.Series) -> str:
         f"Balanced Accuracy : {metrics['balanced_accuracy']:.6f}\n"
         f"Precision         : {metrics['precision']:.6f}\n"
         f"Recall            : {metrics['recall']:.6f}\n"
-        f"F1-score          : {metrics['f1']:.6f}\n\n"
+        f"F1-score          : {metrics['f1']:.6f}\n"
+        f"Probability RMSE  : {rmse:.6f}\n\n"
         "Baseline Comparison\n"
         "-------------------\n"
         f"{baseline_df.to_string(index=False)}\n\n"
@@ -560,6 +573,10 @@ def tune_hyperparameters(
                         prediction_df["y_true"],
                         prediction_df["y_pred"],
                     )
+                    rmse = calculate_probability_rmse(
+                        prediction_df["y_true"],
+                        prediction_df["rise_probability"],
+                    )
                     return_summary = calculate_return_summary(
                         prediction_df,
                         trade_entry_threshold,
@@ -570,6 +587,7 @@ def tune_hyperparameters(
                         "penalty": penalty,
                         "threshold": threshold,
                         "validation_rows": len(prediction_df),
+                        "probability_rmse": rmse,
                         **metrics,
                     }
                     if return_summary:
@@ -865,7 +883,11 @@ def main() -> None:
             selected_penalty,
         )
 
-    metrics_text = format_metrics(prediction_df["y_true"], prediction_df["y_pred"])
+    metrics_text = format_metrics(
+        prediction_df["y_true"],
+        prediction_df["y_pred"],
+        prediction_df["rise_probability"],
+    )
     return_summary = calculate_return_summary(
         prediction_df,
         args.trade_entry_threshold,
