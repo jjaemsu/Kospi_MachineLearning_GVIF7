@@ -2,6 +2,21 @@
 
 This project contains machine learning models and trading strategies.
 
+## Random Forest (KOSPI Direction)
+
+Train and evaluate the Random Forest classifier with lag1 stationary inputs:
+
+```powershell
+python scripts/train_random_forest.py
+```
+
+Outputs are saved under `outputs/`:
+
+- `rf_cumulative_return_comparison.png`
+- `rf_cumulative_prediction_accuracy.png`
+- `rf_feature_importance.csv`
+- `rf_prediction_results.csv`
+
 ## Correlation and VIF report
 
 `src/evaluation/correlation_vif_report.py` reads one or more CSV datasets, analyzes target correlations and predictor multicollinearity, removes predictors with high VIF, and writes before/after reports. When multiple CSVs are provided, it also creates a combined CV-only report that removes Open/High/Low price columns before analysis.
