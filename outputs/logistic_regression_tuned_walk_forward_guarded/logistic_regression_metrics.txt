@@ -36,6 +36,10 @@ Return Summary
 --------------
 Buy and hold cumulative return : 1.290489
 Model strategy cumulative return: 1.020547
+Buy and hold Sharpe ratio      : 3.247926
+Model strategy Sharpe ratio     : 3.738882
+Buy and hold MDD               : -0.198947
+Model strategy MDD              : -0.192433
 Trade rate                      : 0.544218
 
 Selected Model Settings

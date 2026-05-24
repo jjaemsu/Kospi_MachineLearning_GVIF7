@@ -482,17 +482,48 @@ def calculate_return_summary(
     )
 
     if return_type in {"Log_Return", "price_Log_Return"}:
-        buy_and_hold = np.exp(plot_df["target_return"].sum()) - 1
-        strategy = np.exp(plot_df["strategy_return"].sum()) - 1
+        buy_and_hold_curve = np.exp(plot_df["target_return"].cumsum())
+        strategy_curve = np.exp(plot_df["strategy_return"].cumsum())
     else:
-        buy_and_hold = (1 + plot_df["target_return"]).prod() - 1
-        strategy = (1 + plot_df["strategy_return"]).prod() - 1
+        buy_and_hold_curve = (1 + plot_df["target_return"]).cumprod()
+        strategy_curve = (1 + plot_df["strategy_return"]).cumprod()
+
+    buy_and_hold = buy_and_hold_curve.iloc[-1] - 1
+    strategy = strategy_curve.iloc[-1] - 1
+    buy_and_hold_mdd = calculate_max_drawdown(buy_and_hold_curve)
+    strategy_mdd = calculate_max_drawdown(strategy_curve)
+    buy_and_hold_sharpe = calculate_annualized_sharpe(plot_df["target_return"])
+    strategy_sharpe = calculate_annualized_sharpe(plot_df["strategy_return"])
 
     return {
         "buy_and_hold_cumulative_return": buy_and_hold,
         "model_strategy_cumulative_return": strategy,
+        "buy_and_hold_sharpe": buy_and_hold_sharpe,
+        "model_strategy_sharpe": strategy_sharpe,
+        "buy_and_hold_mdd": buy_and_hold_mdd,
+        "model_strategy_mdd": strategy_mdd,
         "trade_rate": float(plot_df["strategy_position"].mean()),
     }
+
+
+def calculate_annualized_sharpe(
+    daily_returns: pd.Series,
+    periods_per_year: int = 252,
+) -> float:
+    daily_returns = pd.Series(daily_returns, dtype="float64").dropna()
+    daily_std = daily_returns.std(ddof=1)
+    if daily_returns.empty or daily_std == 0 or np.isnan(daily_std):
+        return 0.0
+    return float(np.sqrt(periods_per_year) * daily_returns.mean() / daily_std)
+
+
+def calculate_max_drawdown(cumulative_wealth: pd.Series) -> float:
+    cumulative_wealth = pd.Series(cumulative_wealth, dtype="float64").dropna()
+    if cumulative_wealth.empty:
+        return 0.0
+    running_max = cumulative_wealth.cummax()
+    drawdown = cumulative_wealth / running_max - 1
+    return float(drawdown.min())
 
 
 def format_metrics(
@@ -676,29 +707,26 @@ def save_return_comparison(
     )
 
     if return_type in {"Log_Return", "price_Log_Return"}:
-        plot_df["buy_and_hold_cumulative_return"] = np.exp(
-            plot_df["target_return"].cumsum()
-        ) - 1
+        buy_and_hold_curve = np.exp(plot_df["target_return"].cumsum())
         plot_df["strategy_return"] = np.where(
             plot_df["strategy_position"] == 1,
             plot_df["target_return"],
             0.0,
         )
-        plot_df["model_strategy_cumulative_return"] = np.exp(
-            plot_df["strategy_return"].cumsum()
-        ) - 1
+        strategy_curve = np.exp(plot_df["strategy_return"].cumsum())
     else:
-        plot_df["buy_and_hold_cumulative_return"] = (
-            1 + plot_df["target_return"]
-        ).cumprod() - 1
+        buy_and_hold_curve = (1 + plot_df["target_return"]).cumprod()
         plot_df["strategy_return"] = np.where(
             plot_df["strategy_position"] == 1,
             plot_df["target_return"],
             0.0,
         )
-        plot_df["model_strategy_cumulative_return"] = (
-            1 + plot_df["strategy_return"]
-        ).cumprod() - 1
+        strategy_curve = (1 + plot_df["strategy_return"]).cumprod()
+
+    plot_df["buy_and_hold_cumulative_return"] = buy_and_hold_curve - 1
+    plot_df["model_strategy_cumulative_return"] = strategy_curve - 1
+    plot_df["buy_and_hold_drawdown"] = buy_and_hold_curve / buy_and_hold_curve.cummax() - 1
+    plot_df["model_strategy_drawdown"] = strategy_curve / strategy_curve.cummax() - 1
 
     csv_path = output_dir / "return_comparison.csv"
     plot_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
@@ -900,6 +928,14 @@ def main() -> None:
             f"{return_summary['buy_and_hold_cumulative_return']:.6f}\n"
             f"Model strategy cumulative return: "
             f"{return_summary['model_strategy_cumulative_return']:.6f}\n"
+            f"Buy and hold Sharpe ratio      : "
+            f"{return_summary['buy_and_hold_sharpe']:.6f}\n"
+            f"Model strategy Sharpe ratio     : "
+            f"{return_summary['model_strategy_sharpe']:.6f}\n"
+            f"Buy and hold MDD               : "
+            f"{return_summary['buy_and_hold_mdd']:.6f}\n"
+            f"Model strategy MDD              : "
+            f"{return_summary['model_strategy_mdd']:.6f}\n"
             f"Trade rate                      : "
             f"{return_summary['trade_rate']:.6f}"
         )
