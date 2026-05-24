@@ -31,7 +31,7 @@ class KospiWalkForwardBacktester:
         self.tune_frequency = tune_months * 25
         
         self.results = []
-        self.feature_importances_records = [] # [요구사항 반영 추가] 25일 주기 피처 중요도 기록용 리스트
+        self.feature_importance_records = [] # 추가: 피처 중요도 기록 리스트
         self.best_params = None
         self.best_decay = None
 
@@ -52,7 +52,6 @@ class KospiWalkForwardBacktester:
         """[클래스 불균형 가중치 계산] 인위적인 가중치 보정을 막기 위해 1.0으로 고정"""
         return 1.0
     
-
     def optimize_params(self, X_train_full, y_train_full, n_trials=30):
         """[Optuna 튜닝 로직 - 최근 20% 단일 검증으로 속도 최적화]"""
         scale_pos_weight = self._get_scale_pos_weight(y_train_full)
@@ -105,6 +104,19 @@ class KospiWalkForwardBacktester:
 
         return best_params, best_decay
 
+    def _record_feature_importance(self, model, current_date, feature_names):
+        """[추가] 피처 중요도 기록 로직: 동적으로 모든 피처의 중요도를 순위별로 저장합니다."""
+        importances = model.feature_importances_
+        # 피처 이름과 중요도를 묶어서 중요도 기준 내림차순 정렬
+        feat_imp = sorted(zip(feature_names, importances), key=lambda x: x[1], reverse=True)
+        
+        record = {'Date': current_date}
+        for rank, (feat, imp) in enumerate(feat_imp, 1):
+            record[f'Rank {rank} Feature'] = feat
+            record[f'Rank {rank} Importance'] = round(imp, 6)
+            
+        self.feature_importance_records.append(record)
+
     def run_backtest(self):
         """[워크포워드 롤링 백테스트 실행]"""
         total_days = len(self.X)
@@ -130,31 +142,9 @@ class KospiWalkForwardBacktester:
             model = xgb.XGBClassifier(**self.best_params)
             model.fit(X_train_t, y_train_t, sample_weight=full_weights, verbose=False)
             
-            # =========================================================================
-            # [요구사항 반영 추가] 25일 주기마다 상위 10개 피처 중요도 기록
-            # =========================================================================
-            if days_passed % 25 == 0:
-                importances = model.feature_importances_
-                
-                # 피처 개수가 10개보다 적은 예외 상황 방어
-                top_k = min(10, len(self.X.columns)) 
-                # 가장 중요한 피처 인덱스 순 정렬
-                top_indices = np.argsort(importances)[::-1][:top_k]
-                
-                record = {'Date': current_date}
-                # 분석을 용이하게 하기 위해 top1 (피처명) / top1_importance (중요도) 로 분리 기록
-                for i in range(1, 11):
-                    if i <= top_k:
-                        feature_name = self.X.columns[top_indices[i-1]]
-                        importance_score = round(float(importances[top_indices[i-1]]), 4)
-                        record[f'top{i}'] = feature_name
-                        record[f'top{i}_importance'] = importance_score
-                    else:
-                        record[f'top{i}'] = None
-                        record[f'top{i}_importance'] = None
-                        
-                self.feature_importances_records.append(record)
-            # =========================================================================
+            # [추가] 튜닝 주기(25일)마다 현재 모델의 피처 중요도 추출 및 기록
+            if days_passed % self.tune_frequency == 0:
+                self._record_feature_importance(model, current_date, X_train_t.columns)
             
             # 예측 및 확신도 측정
             pred_proba = model.predict_proba(X_test_t)[0]
@@ -186,25 +176,20 @@ class KospiWalkForwardBacktester:
         print("\n백테스팅 완료!")
         results_df = pd.DataFrame(self.results)
         results_df.set_index('Date', inplace=True)
-        return results_df
-    
-    def save_feature_importances(self, output_prefix="kospi_backtest"):
-        """[요구사항 반영 추가] 기록된 피처 중요도를 CSV 파일로 분리 저장하는 메서드"""
-        if not self.feature_importances_records:
-            return
         
-        fi_df = pd.DataFrame(self.feature_importances_records)
-        fi_df.set_index('Date', inplace=True)
-        
-        fi_csv_path = f"{output_prefix}_top10_feature_importances.csv"
-        fi_df.to_csv(fi_csv_path)
-        print(f"[저장 완료] 25일 주기 피처 중요도 분석표: {fi_csv_path}")
+        # [추가] 중요도 기록도 데이터프레임으로 변환하여 함께 반환
+        fi_df = pd.DataFrame(self.feature_importance_records)
+        return results_df, fi_df
 
-
-def save_backtest_results(results_df, output_prefix="kospi_backtest"):
+def save_backtest_results(results_df, fi_df, output_prefix="kospi_backtest"):
     """결과물을 CSV로 저장 및 요약 출력"""
     daily_csv_path = f"{output_prefix}_daily_results.csv"
     results_df.to_csv(daily_csv_path)
+    
+    # [추가] 피처 중요도 CSV 저장
+    if not fi_df.empty:
+        fi_csv_path = f"{output_prefix}_feature_importances.csv"
+        fi_df.to_csv(fi_csv_path, index=False)
     
     summary = results_df['Error_Type'].value_counts().to_dict()
     tp, tn = summary.get('TP', 0), summary.get('TN', 0)
@@ -229,6 +214,9 @@ def save_backtest_results(results_df, output_prefix="kospi_backtest"):
     
     print(f"\n[저장 완료] 일일 상세 결과: {daily_csv_path}")
     print(f"[저장 완료] 총괄 오차 요약: {summary_csv_path}")
+    if not fi_df.empty:
+        print(f"[저장 완료] 25일 주기 피처 중요도: {fi_csv_path}")
+        
     print("\n--- 백테스트 성과 요약 ---")
     print(summary_df.to_string(index=False))
 
@@ -262,10 +250,7 @@ if __name__ == "__main__":
         
         # 백테스터 실행 (첫 3개월 학습, 1개월마다 튜닝)
         backtester = KospiWalkForwardBacktester(X, y, initial_months=3, tune_months=1)
-        results = backtester.run_backtest()
+        results, fi_df = backtester.run_backtest() # 수정: 중요도 df도 함께 반환
         
         # 결과 저장
-        save_backtest_results(results, output_prefix="kospi_final")
-        
-        # [요구사항 반영 추가] 25일 주기 피처 중요도 결과물(CSV) 추가 저장
-        backtester.save_feature_importances(output_prefix="kospi_final")
+        save_backtest_results(results, fi_df, output_prefix="kospi_final") # 수정: 함수 인자 추가 반영
