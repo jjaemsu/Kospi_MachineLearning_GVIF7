@@ -1,41 +1,41 @@
 KOSPI Logistic Regression Evaluation
 ====================================
-Accuracy          : 0.554054
-Balanced Accuracy : 0.523750
-Precision         : 0.693182
-Recall            : 0.610000
-F1-score          : 0.648936
+Accuracy          : 0.571429
+Balanced Accuracy : 0.542298
+Precision         : 0.704545
+Recall            : 0.626263
+F1-score          : 0.663102
 
 Baseline Comparison
 -------------------
-                   baseline  accuracy  balanced_accuracy  precision  recall       f1
-                  always_up  0.675676            0.50000   0.675676    1.00 0.806452
-                always_down  0.324324            0.50000   0.000000    0.00 0.000000
-             majority_class  0.675676            0.50000   0.675676    1.00 0.806452
-previous_observed_direction  0.554054            0.49125   0.670000    0.67 0.670000
+                   baseline  accuracy  balanced_accuracy  precision   recall       f1
+                  always_up  0.673469           0.500000   0.673469 1.000000 0.804878
+                always_down  0.326531           0.500000   0.000000 0.000000 0.000000
+             majority_class  0.673469           0.500000   0.673469 1.000000 0.804878
+previous_observed_direction  0.551020           0.489583   0.666667 0.666667 0.666667
 
 Confusion Matrix
 ----------------
-[[21 27]
- [39 61]]
+[[22 26]
+ [37 62]]
 
 Classification Report
 ---------------------
               precision    recall  f1-score   support
 
-           0       0.35      0.44      0.39        48
-           1       0.69      0.61      0.65       100
+           0       0.37      0.46      0.41        48
+           1       0.70      0.63      0.66        99
 
-    accuracy                           0.55       148
-   macro avg       0.52      0.52      0.52       148
-weighted avg       0.58      0.55      0.56       148
+    accuracy                           0.57       147
+   macro avg       0.54      0.54      0.54       147
+weighted avg       0.60      0.57      0.58       147
 
 
 Return Summary
 --------------
-Buy and hold cumulative return : 1.286077
+Buy and hold cumulative return : 1.290489
 Model strategy cumulative return: 1.020547
-Trade rate                      : 0.540541
+Trade rate                      : 0.544218
 
 Selected Model Settings
 -----------------------
