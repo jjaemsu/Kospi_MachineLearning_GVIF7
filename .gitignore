@@ -1,27 +1,30 @@
-# 1. 가상환경 및 환경변수
+# 1. 가상환경 및 환경설정
 venv/
 .env
 *.env
 
-# 2. 결과물 및 캐시 (데이터 파일은 제외, csv는 git에 허용됨)
+# 2. 결과물 및 데이터 (클라우드 배포를 위해 csv, html, png는 포함)
 outputs/*
 !outputs/.gitkeep
+!outputs/**/*.csv
+!outputs/**/*.html
+!outputs/**/*.png
 experiments/*
 !experiments/.gitkeep
 
-# 3. 파이썬 임시 파일 및 주피터 캐시
+# 3. 파이썬 캐시 및 체크포인트
 __pycache__/
 *.py[cod]
 *$py.class
 .ipynb_checkpoints/
 .pytest_cache/
 
-# 4. 무거운 모델 가중치 파일 차단
+# 4. 대용량 모델 파일 (필요 시 주석 해제)
 *.pkl
 *.h5
 *.pt
 *.pth
 
-# 5. OS 및 시스템 파일
+# 5. OS 생성 파일
 .DS_Store
 Thumbs.db
