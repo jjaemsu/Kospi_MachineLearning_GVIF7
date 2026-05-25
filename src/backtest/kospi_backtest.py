@@ -14,9 +14,9 @@ TRADING_DAYS = 252
 
 # 백테스팅을 수행할 모델과 해당 예측 결과 파일 경로 매핑
 MODEL_CONFIGS = {
-    "LSTM": {"path": "outputs/walk_forward_predictions.csv", "buy_thr": 0.55, "sell_thr": 0.45},
+    "LSTM": {"path": "outputs/lstm_walk_forward_predictions.csv", "buy_thr": 0.55, "sell_thr": 0.45},
     "Random_Forest": {"path": "outputs/rf_walk_forward_results.csv", "buy_thr": 0.55, "sell_thr": 0.45},
-    "XGBoost": {"path": "outputs/xgb_results.csv", "buy_thr": 0.50, "sell_thr": 0.50},
+    "XGBoost": {"path": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_daily_results_3차.csv", "buy_thr": 0.50, "sell_thr": 0.50},
     "Logistic_Regression": {"path": "outputs/logistic_regression_walk_forward.csv", "buy_thr": 0.52, "sell_thr": 0.48},
     "LightGBM": {"path": "outputs/lgbm_walk_forward_results.csv", "buy_thr": 0.55, "sell_thr": 0.45}
 }

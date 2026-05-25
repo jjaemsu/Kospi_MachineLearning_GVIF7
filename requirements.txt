@@ -13,3 +13,4 @@ statsmodels
 optuna
 torch
 tqdm
+streamlit

@@ -24,6 +24,27 @@ def load_summary_data():
         return pd.read_csv(summary_path)
     return None
 
+@st.cache_data
+def load_model_data(model_name):
+    # 파일 이름 매핑 (최종 3차 결과물 반영)
+    file_map = {
+        "LSTM": "outputs/lstm_walk_forward_predictions.csv",
+        "Random_Forest": "outputs/rf_walk_forward_results.csv",
+        "XGBoost": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_daily_results_3차.csv",
+        "Logistic_Regression": "outputs/logistic_regression_walk_forward.csv"
+    }
+    
+    path = file_map.get(model_name)
+    if path and os.path.exists(path):
+        df = pd.read_csv(path)
+        # 컬럼 표준화
+        if 'actual' in df.columns: df.rename(columns={'actual': 'Actual_Target'}, inplace=True)
+        if 'Actual' in df.columns: df.rename(columns={'Actual': 'Actual_Target'}, inplace=True)
+        if 'predicted' in df.columns: df.rename(columns={'predicted': 'Predicted_Target'}, inplace=True)
+        if 'Predicted' in df.columns: df.rename(columns={'Predicted': 'Predicted_Target'}, inplace=True)
+        return df
+    return None
+
 # ==========================================
 # 사이드바 네비게이션
 # ==========================================
@@ -119,6 +140,29 @@ elif page == "2. Model Performance":
                 else:
                     st.info(f"{disp_name} 정확도 이미지 파일 없음")
 
+        st.markdown("---")
+        st.subheader("🎯 모델별 상세 예측 분포 (Confusion Matrix)")
+        selected_cm = st.selectbox("분석할 모델을 선택하세요:", summary_df['Model'].tolist())
+        model_df = load_model_data(selected_cm)
+        
+        if model_df is not None:
+            cm = pd.crosstab(model_df['Actual_Target'], model_df['Predicted_Target'], 
+                             rownames=['실제(Actual)'], colnames=['예측(Predicted)'], margins=True)
+            
+            col_a, col_b = st.columns([1, 2])
+            with col_a:
+                st.write("**Confusion Matrix Table**")
+                st.dataframe(cm)
+            with col_b:
+                st.markdown(f"""
+                **{selected_cm} 분석:**
+                - 실제 상승(1)을 맞춘 횟수: `{cm.loc[1, 1] if 1 in cm.index and 1 in cm.columns else 0}`
+                - 실제 하락(0)을 맞춘 횟수: `{cm.loc[0, 0] if 0 in cm.index and 0 in cm.columns else 0}`
+                - 전체 예측 수: `{len(model_df)}`
+                """)
+        else:
+            st.error("상세 데이터를 불러올 수 없습니다.")
+
 # ==========================================
 # Page 3: Backtest Analysis
 # ==========================================
@@ -145,10 +189,21 @@ elif page == "4. Feature Insights":
     st.title("🔍 Feature Insights")
     st.markdown("인공지능이 코스피 예측을 위해 가장 중요하게 참고한 지표들입니다.")
     
-    fi_path = "outputs/rf_feature_importance.csv"
+    fi_options = {
+        "Random Forest": "outputs/rf_feature_importance.csv",
+        "XGBoost (Final 3차)": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_feature_importances_3차.csv"
+    }
+    
+    selected_fi = st.selectbox("분석할 모델을 선택하세요:", list(fi_options.keys()))
+    fi_path = fi_options[selected_fi]
+    
     if os.path.exists(fi_path):
         fi_df = pd.read_csv(fi_path)
-        st.subheader("Random Forest 중요 지표 TOP 15")
+        # XGBoost는 컬럼명이 'feature', 'importance' 또는 다른 이름일 수 있으므로 유연하게 처리
+        if 'importance' not in fi_df.columns and len(fi_df.columns) >= 2:
+            fi_df.columns = ['feature', 'importance']
+            
+        st.subheader(f"{selected_fi} 중요 지표 TOP 15")
         
         top_features = fi_df.head(15).sort_values(by='importance', ascending=True)
         fig = go.Figure(go.Bar(
@@ -160,10 +215,10 @@ elif page == "4. Feature Insights":
         fig.update_layout(template='plotly_white', height=500, xaxis_title="Importance")
         st.plotly_chart(fig, use_container_width=True)
         
-        st.markdown("""
-        **💡 분석 결과 요약:**
-        - 우리 모델은 거시경제 지표 중 **달러 인덱스(Dollar Index)**와 **금리 변동**을 매우 중요하게 생각합니다.
-        - 또한 투신 및 연기금의 **순매수량**과 같은 수급 데이터가 방향성 예측에 큰 영향을 미치는 것으로 나타났습니다.
+        st.markdown(f"""
+        **💡 {selected_fi} 분석 결과 요약:**
+        - 이 모델은 거시경제 및 기술적 지표 중 특정 변수들에 가중치를 높게 두었습니다.
+        - 상위 지표들의 변동을 통해 향후 코스피의 방향성을 가늠해 볼 수 있습니다.
         """)
     else:
-        st.info("변수 중요도 파일(rf_feature_importance.csv)이 없습니다.")
+        st.info(f"선택한 모델의 변수 중요도 파일({fi_path})이 없습니다.")
