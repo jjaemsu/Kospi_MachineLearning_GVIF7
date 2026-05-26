@@ -141,8 +141,8 @@ elif page == "🔗 2. Correlation & VIF Analysis":
         datasets = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d)) and d != 'combined_cv_only']
         
         if datasets:
-            # merged_data를 기본(가장 위)으로 정렬
-            datasets = sorted(datasets, key=lambda x: 0 if x == 'merged_data' else 1)
+            # 'merged'가 포함된 폴더를 기본(가장 위)으로 정렬
+            datasets = sorted(datasets, key=lambda x: 0 if 'merged' in x else 1)
             
             selected_dataset = st.selectbox("분석할 데이터셋을 선택하세요:", datasets)
             
@@ -276,8 +276,11 @@ elif page == "💡 5. Feature Insights":
     st.markdown("인공지능이 코스피 예측을 위해 가장 중요하게 참고한 지표들입니다.")
     
     fi_options = {
-        "Random Forest": "outputs/rf_feature_importance.csv",
-        "XGBoost (Final 3차)": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_feature_importances_3차.csv"
+        "XGBoost (Final 1차)": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_feature_importances_1차.csv",
+        "XGBoost (Final 2차)": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_feature_importances_2차.csv",
+        "XGBoost (Final 3차)": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_feature_importances_3차.csv",
+        "XGBoost (Final 4차)": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_feature_importances_4차.csv",
+        "XGBoost (Final 5차)": "src/퀀트팀_최종_성적/최종_featrue지우기/kospi_final_feature_importances_5차.csv"
     }
     
     selected_fi = st.selectbox("분석할 모델을 선택하세요:", list(fi_options.keys()))
@@ -285,8 +288,20 @@ elif page == "💡 5. Feature Insights":
     
     if os.path.exists(fi_path):
         fi_df = pd.read_csv(fi_path)
-        # XGBoost는 컬럼명이 'feature', 'importance' 또는 다른 이름일 수 있으므로 유연하게 처리
-        if 'importance' not in fi_df.columns and len(fi_df.columns) >= 2:
+        # XGBoost는 시계열(Date, Rank 1 Feature, Rank 1 Importance...) 형태일 수 있음
+        if 'Rank 1 Feature' in fi_df.columns:
+            feature_cols = [col for col in fi_df.columns if 'Feature' in col]
+            imp_cols = [col for col in fi_df.columns if 'Importance' in col]
+            
+            all_features = []
+            all_importances = []
+            for f_col, i_col in zip(feature_cols, imp_cols):
+                all_features.extend(fi_df[f_col].tolist())
+                all_importances.extend(fi_df[i_col].tolist())
+                
+            agg_df = pd.DataFrame({'feature': all_features, 'importance': all_importances})
+            fi_df = agg_df.groupby('feature', as_index=False).mean()
+        elif 'importance' not in fi_df.columns and len(fi_df.columns) == 2:
             fi_df.columns = ['feature', 'importance']
             
         st.subheader(f"{selected_fi} 중요 지표 TOP 15")
