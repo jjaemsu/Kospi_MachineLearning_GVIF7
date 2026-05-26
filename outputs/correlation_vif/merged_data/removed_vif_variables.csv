@@ -1,8 +1,0 @@
-﻿Step,RemovedVariable,VIFAtRemoval,Reason
-1,High,2108.5103218491245,Highest remaining VIF >= 10
-2,Low,1133.982822682085,Highest remaining VIF >= 10
-3,US_CPI,143.4765192700246,Highest remaining VIF >= 10
-4,KR_CPI,61.95252956202538,Highest remaining VIF >= 10
-5,Nikkei225,39.227309434647466,Highest remaining VIF >= 10
-6,TaiwanWeighted,36.66268446888585,Highest remaining VIF >= 10
-7,US_Interest_Rate_10Y,14.062226857873824,Highest remaining VIF >= 10

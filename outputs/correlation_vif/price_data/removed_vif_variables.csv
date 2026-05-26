@@ -1,7 +1,0 @@
-﻿Step,RemovedVariable,VIFAtRemoval,Reason
-1,High,6007.378925271349,Highest remaining VIF >= 10
-2,Low,2735.8821039341365,Highest remaining VIF >= 10
-3,Log_Return,2025.6873525603382,Highest remaining VIF >= 10
-4,Close,976.5947883698634,Highest remaining VIF >= 10
-5,MACD,31.301265932711587,Highest remaining VIF >= 10
-6,ATR_14,17.969979391558972,Highest remaining VIF >= 10
